@@ -209,7 +209,7 @@ async def processar_mensagem(ticket_id: str, contact_id: str, numero_whatsapp: s
 
     # 5. Salva e envia
     db.salvar_mensagem(conversa_id=ticket_id, papel="assistant", conteudo=resposta, numero=contact_id)
-    await enviar_mensagem_vectax(ticket_id, numero_whatsapp, resposta)
+    await enviar_mensagem_vectax(ticket_id, numero_whatsapp, resposta, contact_id)
 
 
 async def _montar_contexto(numero_whatsapp: str, mensagem: str, ticket_id: str) -> str:
@@ -309,14 +309,22 @@ async def chamar_claude(historico: list[dict], contexto: str) -> str:
     return response.content[0].text
 
 
-async def enviar_mensagem_vectax(ticket_id: str, numero: str, mensagem: str):
+async def enviar_mensagem_vectax(ticket_id: str, numero: str, mensagem: str, contact_id: str = ""):
     url = f"{VECTAX_API_URL}/v1/api/external/{VECTAX_API_ID}"
-    payload = {"body": mensagem, "number": numero, "externalKey": ticket_id}
+
+    # Tenta primeiro com o número real do WhatsApp
+    # O externalKey deve ser único por conversa — usamos ticket_id
+    payload = {
+        "body":        mensagem,
+        "number":      numero,
+        "externalKey": f"ticket_{ticket_id}",
+    }
     headers = {"Authorization": f"Bearer {VECTAX_TOKEN}", "Content-Type": "application/json"}
+
     try:
         resp = await chatbot_client.post(url, json=payload, headers=headers)
+        log.info(f"📤 Enviado ticket={ticket_id} numero={numero} status={resp.status_code} body={resp.text[:200]}")
         resp.raise_for_status()
-        log.info(f"📤 Enviado ticket={ticket_id} status={resp.status_code}")
     except httpx.HTTPStatusError as e:
         log.error(f"Erro Vectax {e.response.status_code}: {e.response.text[:200]}")
     except Exception as e:
