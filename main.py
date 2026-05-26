@@ -23,12 +23,6 @@ from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 
 from database import ConversationDB
-from consulta_contratos import (
-    carregar_base,
-    buscar_por_whatsapp,
-    buscar_por_cpf,
-    resumo_contrato,
-)
 
 # ---------------------------------------------------------------------------
 # Configuração
@@ -54,14 +48,6 @@ VECTAX_TOKEN   = os.getenv("VECTAX_TOKEN")
 BASE_CSV_PATH  = os.getenv("BASE_CSV_PATH", "base_contratos.csv")
 
 db = ConversationDB("conversas.db")
-
-# ---------------------------------------------------------------------------
-# Carrega base de contratos na inicialização
-# ---------------------------------------------------------------------------
-
-@app.on_event("startup")
-async def startup():
-    carregar_base(BASE_CSV_PATH)
 
 
 # ---------------------------------------------------------------------------
@@ -149,10 +135,7 @@ async def processar_mensagem(
     numero_whatsapp: str,
     mensagem: str,
 ):
-    # 1. Tenta identificar o cliente pelo número de WhatsApp
-    contexto_cliente = _montar_contexto_cliente(numero_whatsapp, mensagem)
-
-    # 2. Salva mensagem do cliente
+    # 1. Salva mensagem do cliente
     db.salvar_mensagem(
         conversa_id=ticket_id,
         papel="user",
@@ -160,19 +143,19 @@ async def processar_mensagem(
         numero=contact_id,
     )
 
-    # 3. Busca histórico
+    # 2. Busca histórico
     historico = db.buscar_historico(conversa_id=ticket_id, limite=20)
 
-    # 4. Chama Claude com contexto do cliente
+    # 3. Chama Claude
     try:
-        resposta = await chamar_claude(historico, contexto_cliente)
+        resposta = await chamar_claude(historico)
     except Exception as e:
         log.error(f"Erro Claude: {e}")
         resposta = "Desculpe, ocorreu uma instabilidade. Um atendente entrará em contato em breve!"
 
     log.info(f"✅ Resposta ticket={ticket_id}: {resposta[:100]}")
 
-    # 5. Salva e envia resposta
+    # 4. Salva e envia resposta
     db.salvar_mensagem(
         conversa_id=ticket_id,
         papel="assistant",
@@ -180,75 +163,23 @@ async def processar_mensagem(
         numero=contact_id,
     )
 
-    await enviar_mensagem_vectax(ticket_id, contact_id, resposta)
+    # Envia usando o número de WhatsApp real
+    log.info(f"📱 Enviando para numero_whatsapp={numero_whatsapp} contact_id={contact_id}")
+    await enviar_mensagem_vectax(ticket_id, numero_whatsapp, resposta)
 
 
-def _montar_contexto_cliente(numero_whatsapp: str, mensagem: str) -> str:
-    """
-    Tenta identificar o cliente pelo WhatsApp.
-    Se não encontrar, verifica se a mensagem contém um CPF.
-    Retorna uma string de contexto para ser injetada no prompt.
-    """
 
-    # Tenta pelo número de WhatsApp
-    contratos = buscar_por_whatsapp(numero_whatsapp)
-
-    # Se não achou pelo WhatsApp, tenta extrair CPF da mensagem
-    if not contratos:
-        cpf = _extrair_cpf(mensagem)
-        if cpf:
-            contratos = buscar_por_cpf(cpf)
-
-    if not contratos:
-        return (
-            "CONTEXTO DO CLIENTE:\n"
-            "Número não encontrado na base de contratos.\n"
-            "Solicite o CPF ao cliente para identificá-lo."
-        )
-
-    if len(contratos) == 1:
-        resumo = resumo_contrato(contratos[0])
-        return f"CONTEXTO DO CLIENTE:\n{json.dumps(resumo, ensure_ascii=False, indent=2)}"
-
-    # Múltiplos contratos — passa lista resumida
-    lista = []
-    for c in contratos:
-        r = resumo_contrato(c)
-        lista.append({
-            "contrato":         r["contrato"]["numero"],
-            "valor_parcela":    r["contrato"]["valor_parcela"],
-            "parcelas_atrasadas": r["situacao"]["parcelas_atrasadas"],
-            "total_devido":     r["situacao"]["total_devido"],
-        })
-
-    return (
-        f"CONTEXTO DO CLIENTE:\n"
-        f"Nome: {contratos[0]['Nome']}\n"
-        f"CPF: {contratos[0]['CPF']}\n"
-        f"Este cliente possui {len(contratos)} contratos:\n"
-        + json.dumps(lista, ensure_ascii=False, indent=2)
-        + "\nPergunte ao cliente sobre qual contrato ele deseja tratar."
-    )
-
-
-async def chamar_claude(historico: list[dict], contexto_cliente: str) -> str:
-    """
-    Chama a Claude injetando o contexto do cliente no system prompt.
-    """
-    system = SYSTEM_PROMPT + "\n\n" + contexto_cliente
-
+async def chamar_claude(historico: list[dict]) -> str:
     mensagens = [
         {"role": msg["papel"], "content": msg["conteudo"]}
         for msg in historico
     ]
-
     response = claude_client.messages.create(
         model="claude-sonnet-4-5",
         max_tokens=1024,
-        system=system,
+        system=SYSTEM_PROMPT,
         messages=mensagens,
     )
-
     return response.content[0].text
 
 
