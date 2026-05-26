@@ -171,7 +171,7 @@ async def receber_webhook(request: Request):
     if not ticket_id or not contact_id:
         return JSONResponse({"ok": True, "ignorado": "sem identificadores"})
 
-    log.info(f"✉ ticket={ticket_id} numero={numero_raw} fromMe={from_me} sendType={send_type} | {body[:80]}")
+    log.info(f"✉ ticket={ticket_id} numero={numero_raw} contact_id={contact_id} fromMe={from_me} sendType={send_type} | {body[:80]}")
 
     await processar_mensagem(
         ticket_id=ticket_id,
@@ -312,14 +312,16 @@ async def chamar_claude(historico: list[dict], contexto: str) -> str:
 async def enviar_mensagem_vectax(ticket_id: str, numero: str, mensagem: str, contact_id: str = ""):
     url = f"{VECTAX_API_URL}/v1/api/external/{VECTAX_API_ID}"
 
-    # Usa o número com o 9 (formato correto) e externalKey baseado no número
-    # Isso garante que sempre cai no mesmo ticket por número de WhatsApp
+    # Usa o número do cliente e o ticket_id como externalKey
+    # O número deve ser o mesmo que a Vectax tem cadastrado para o contato
+    # Vectax cadastra contatos sem o 9 no WABA — precisa enviar no mesmo formato
+    numero_sem9 = _remover_nono_digito(numero)
     payload = {
         "body":        mensagem,
-        "number":      numero,
-        "externalKey": numero,
+        "number":      numero_sem9,
+        "externalKey": ticket_id,
     }
-    log.info(f"📤 Enviando number={numero} externalKey={numero}")
+    log.info(f"📤 Enviando number={numero_sem9} externalKey={ticket_id} (original={numero})")
     headers = {"Authorization": f"Bearer {VECTAX_TOKEN}", "Content-Type": "application/json"}
 
     try:
