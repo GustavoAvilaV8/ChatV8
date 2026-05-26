@@ -341,11 +341,11 @@ async def enviar_mensagem_vectax(ticket_id: str, numero: str, mensagem: str, con
 
     # Usa o ticket_id como externalKey — assim nas próximas mensagens
     # do mesmo ticket a Vectax encontra e não cria um novo
-    # Usa o número exatamente como a Vectax cadastrou via NewContact
-    numero_salvo = db.buscar_numero_contato(contact_id) if contact_id else ""
-    numero_envio = numero_salvo if numero_salvo else numero
-    external_key = numero_envio
-    log.info(f"📤 numero_envio={numero_envio} salvo={numero_salvo} original={numero}")
+    # Usa o ticketId do cliente como externalKey — a Vectax deve priorizar
+    # o externalKey para encontrar o ticket em vez de criar um novo
+    numero_envio = _remover_nono_digito(numero)  # número sem o 9 para o contato
+    external_key = ticket_id                      # ticketId do cliente como referência
+    log.info(f"📤 numero_envio={numero_envio} externalKey={external_key} original={numero}")
 
     payload = {
         "body":        mensagem,
