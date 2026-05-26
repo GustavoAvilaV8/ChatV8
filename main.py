@@ -146,15 +146,17 @@ async def receber_webhook(request: Request):
     send_type  = msg.get("sendType", "")
     is_note    = msg.get("note", False)
 
-    # Número real do WhatsApp está em message.ticket.contact.number
+    # Número real do WhatsApp — prioriza raw.from (sempre tem o número real)
+    # contact.number pode ser ID interno quando contato não está cadastrado
     ticket_obj  = msg.get("ticket", {})
     contact_obj = ticket_obj.get("contact", {})
     raw_obj     = msg.get("raw", {})
     numero_raw  = str(
-        contact_obj.get("number")
-        or raw_obj.get("from")
+        raw_obj.get("from")
+        or contact_obj.get("number")
         or contact_id
     )
+    log.info(f"📞 numero={numero_raw} (raw={raw_obj.get('from')} contact={contact_obj.get('number')})")
 
     if from_me or send_type == "bot" or is_note or not body:
         return JSONResponse({"ok": True, "ignorado": "filtrado"})
