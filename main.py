@@ -341,15 +341,12 @@ async def enviar_mensagem_vectax(ticket_id: str, numero: str, mensagem: str, con
 
     # Usa o ticket_id como externalKey — assim nas próximas mensagens
     # do mesmo ticket a Vectax encontra e não cria um novo
-    # Busca o número exato como a Vectax cadastrou (via NewContact)
-    numero_salvo = db.buscar_numero_contato(contact_id) if contact_id else ""
-    if numero_salvo:
-        numero_envio = numero_salvo
-    else:
-        # Fallback: usa o número do raw sem o 9 se tiver 13 dígitos
-        numero_envio = _remover_nono_digito(numero)
+    # Sempre envia sem o 9 — a Vectax normaliza para esse formato internamente
+    # Números sem o 9 (12 dígitos) ficam iguais
+    # Números com o 9 (13 dígitos) têm o 9 removido
+    numero_envio = _remover_nono_digito(numero)
     external_key = numero_envio
-    log.info(f"📤 numero_envio={numero_envio} (salvo={numero_salvo} original={numero})")
+    log.info(f"📤 numero_envio={numero_envio} original={numero}")
 
     payload = {
         "body":        mensagem,
