@@ -1,11 +1,11 @@
 """
-Servidor de integração: Vectax + Claude IA
-==========================================
-Recebe webhooks da Vectax (evento NewMessage),
-processa com a Claude e responde automaticamente.
+Servidor de integração: Vectax + Claude IA — Cobrança Crédito CLT
+=================================================================
+Recebe webhooks da Vectax, identifica o cliente pelo número de WhatsApp
+ou CPF, consulta parcelas em aberto e responde via Claude.
 
 Requisitos:
-    pip install fastapi uvicorn anthropic httpx python-dotenv
+    pip install fastapi uvicorn anthropic httpx python-dotenv python-dateutil
 
 Uso:
     uvicorn main:app --host 0.0.0.0 --port 8000 --reload
@@ -23,6 +23,12 @@ from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 
 from database import ConversationDB
+from consulta_contratos import (
+    carregar_base,
+    buscar_por_whatsapp,
+    buscar_por_cpf,
+    resumo_contrato,
+)
 
 # ---------------------------------------------------------------------------
 # Configuração
@@ -36,138 +42,97 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-app = FastAPI(title="Vectax + Claude IA", version="2.0.0")
+app = FastAPI(title="Cobrança CLT — Claude IA", version="3.0.0")
 
-# Clientes externos
 claude_client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 chatbot_client = httpx.AsyncClient(timeout=30)
 
-# Configurações da Vectax
 VECTAX_API_URL = os.getenv("VECTAX_API_URL", "https://enterprise-369api.v8sistema.com")
-VECTAX_API_ID  = os.getenv("VECTAX_API_ID")   # ID da API (ex: 7f82649a-2083-489d-a0ad-b10586c57768)
-VECTAX_TOKEN   = os.getenv("VECTAX_TOKEN")     # Token JWT da Vectax
+VECTAX_API_ID  = os.getenv("VECTAX_API_ID")
+VECTAX_TOKEN   = os.getenv("VECTAX_TOKEN")
 
-# Números permitidos para teste — deixe vazio [] para atender todos
-# Exemplo: NUMEROS_TESTE = ["5511999999999", "5521988888888"]
-NUMEROS_TESTE: list[str] = os.getenv("NUMEROS_TESTE", "").split(",") if os.getenv("NUMEROS_TESTE") else []
+BASE_CSV_PATH  = os.getenv("BASE_CSV_PATH", "base_contratos.csv")
 
-# Banco de conversas (SQLite local)
 db = ConversationDB("conversas.db")
 
 # ---------------------------------------------------------------------------
-# Prompt de sistema da IA — personalize com informações do seu negócio
+# Carrega base de contratos na inicialização
 # ---------------------------------------------------------------------------
 
-SYSTEM_PROMPT = """Você é um assistente virtual inteligente e cordial de atendimento ao cliente.
+@app.on_event("startup")
+async def startup():
+    carregar_base(BASE_CSV_PATH)
 
-Suas responsabilidades:
-- Responder dúvidas sobre produtos e serviços com clareza e objetividade
-- Identificar oportunidades de venda e registrá-las quando adequado
-- Escalar para um atendente humano quando a situação exigir
-- Manter tom amigável, profissional e empático em todas as interações
 
-Diretrizes importantes:
-- Seja conciso: respostas curtas e diretas são preferidas no WhatsApp
-- Nunca invente informações que não possui
-- Se não souber algo, diga honestamente e ofereça alternativas
-- Use linguagem natural, sem excessos de formalidade
+# ---------------------------------------------------------------------------
+# Prompt de sistema
+# ---------------------------------------------------------------------------
 
-Quando identificar interesse claro de compra, mencione que vai registrar a oportunidade.
+SYSTEM_PROMPT = """Você é um assistente virtual de cobrança do Crédito CLT, especializado em consignado privado.
+
+Seu objetivo é ajudar clientes a entenderem sua situação financeira e negociar parcelas em atraso de forma cordial e profissional.
+
+REGRAS IMPORTANTES:
+- Seja sempre respeitoso, empático e profissional
+- Nunca pressione ou ameace o cliente
+- Apresente os valores de forma clara (use R$ e formato brasileiro)
+- Se o cliente tiver múltiplos contratos, liste-os e pergunte sobre qual ele quer tratar
+- Se não conseguir identificar o cliente, peça o CPF educadamente
+- Nunca invente informações que não estão no contexto fornecido
+- Respostas curtas e objetivas — estamos no WhatsApp
+
+FLUXO DE ATENDIMENTO:
+1. Identifique o cliente (pelo número ou CPF)
+2. Apresente a situação das parcelas
+3. Ofereça opções: negociação, boleto, esclarecimentos
+4. Encaminhe para atendente humano se necessário
+
+Quando tiver os dados do cliente no contexto, use-os para personalizar o atendimento.
 """
 
 # ---------------------------------------------------------------------------
-# Endpoints
+# Webhook
 # ---------------------------------------------------------------------------
 
 @app.get("/")
 async def health_check():
-    return {"status": "online", "servico": "Vectax + Claude IA"}
+    return {"status": "online", "servico": "Cobrança CLT — Claude IA"}
 
 
 @app.post("/webhook")
 async def receber_webhook(request: Request):
-    """
-    Recebe o evento NewMessage da Vectax.
-
-    Payload esperado:
-    {
-      "event": "NewMessage",
-      "tenantId": 1,
-      "message": {
-        "id": "...",
-        "ticketId": 9902,
-        "contactId": 17256,
-        "body": "Texto da mensagem",
-        "fromMe": false,
-        "sendType": "chat",   // "bot" = mensagem automática, ignorar
-        "note": false,
-        "mediaType": "chat",
-        "mediaUrl": null,
-        ...
-      }
-    }
-    """
     try:
         corpo = await request.json()
     except Exception:
         raise HTTPException(status_code=400, detail="JSON inválido")
 
-    log.info(f"Webhook recebido: {json.dumps(corpo, ensure_ascii=False)[:300]}")
+    log.info(f"Webhook COMPLETO: {json.dumps(corpo, ensure_ascii=False)}")
 
-    # Valida que é o evento correto
     evento = corpo.get("event")
     if evento != "NewMessage":
-        log.info(f"Evento '{evento}' ignorado — só processa NewMessage")
         return JSONResponse({"ok": True, "ignorado": f"evento {evento}"})
 
-    msg = corpo.get("message", {})
-
-    # Extrai campos do payload da Vectax
+    msg        = corpo.get("message", {})
     ticket_id  = str(msg.get("ticketId", ""))
     contact_id = str(msg.get("contactId", ""))
+    numero_raw = str(msg.get("number") or contact_id)
     body       = msg.get("body", "").strip()
     from_me    = msg.get("fromMe", False)
-    send_type  = msg.get("sendType", "")   # "chat", "bot", "api"
+    send_type  = msg.get("sendType", "")
     is_note    = msg.get("note", False)
-    media_type = msg.get("mediaType", "chat")
 
-    # --- Filtros: ignora mensagens que não devem ser processadas ---
-
-    # Ignora mensagens enviadas pelo próprio sistema (evita loop infinito)
-    if from_me:
-        log.info("Mensagem fromMe=true — ignorada para evitar loop")
-        return JSONResponse({"ok": True, "ignorado": "fromMe"})
-
-    # Ignora mensagens automáticas de bot
-    if send_type == "bot":
-        log.info("Mensagem sendType=bot — ignorada")
-        return JSONResponse({"ok": True, "ignorado": "sendType bot"})
-
-    # Ignora notas internas
-    if is_note:
-        log.info("Nota interna — ignorada")
-        return JSONResponse({"ok": True, "ignorado": "note"})
-
-    # Ignora mensagens sem texto (áudio, imagem, etc. sem legenda)
-    if not body:
-        log.info(f"Mensagem sem texto (mediaType={media_type}) — ignorada")
-        return JSONResponse({"ok": True, "ignorado": "sem texto"})
+    if from_me or send_type == "bot" or is_note or not body:
+        return JSONResponse({"ok": True, "ignorado": "filtrado"})
 
     if not ticket_id or not contact_id:
-        log.warning("Webhook sem ticketId ou contactId — ignorado")
         return JSONResponse({"ok": True, "ignorado": "sem identificadores"})
 
-    # --- Filtro de teste: responde só para números específicos ---
-    if NUMEROS_TESTE and contact_id not in NUMEROS_TESTE:
-        log.info(f"Contato {contact_id} fora da lista de teste — ignorado")
-        return JSONResponse({"ok": True, "ignorado": "fora da lista de teste"})
+    log.info(f"✉ ticket={ticket_id} numero={numero_raw} | {body[:80]}")
 
-    log.info(f"✉ Nova mensagem | ticket={ticket_id} contato={contact_id} | {body[:80]}")
-
-    # Processa e responde
-    await processar_e_responder(
+    await processar_mensagem(
         ticket_id=ticket_id,
         contact_id=contact_id,
+        numero_whatsapp=numero_raw,
         mensagem=body,
     )
 
@@ -178,18 +143,16 @@ async def receber_webhook(request: Request):
 # Lógica principal
 # ---------------------------------------------------------------------------
 
-async def processar_e_responder(ticket_id: str, contact_id: str, mensagem: str):
-    """
-    Fluxo completo:
-    1. Salva mensagem do cliente
-    2. Busca histórico da conversa (contexto para a IA)
-    3. Chama a Claude com o histórico completo
-    4. Salva resposta da IA
-    5. Envia resposta ao cliente via API da Vectax
-    6. (Opcional) Registra oportunidade se detectar interesse de compra
-    """
+async def processar_mensagem(
+    ticket_id: str,
+    contact_id: str,
+    numero_whatsapp: str,
+    mensagem: str,
+):
+    # 1. Tenta identificar o cliente pelo número de WhatsApp
+    contexto_cliente = _montar_contexto_cliente(numero_whatsapp, mensagem)
 
-    # 1. Salva mensagem do cliente
+    # 2. Salva mensagem do cliente
     db.salvar_mensagem(
         conversa_id=ticket_id,
         papel="user",
@@ -197,47 +160,83 @@ async def processar_e_responder(ticket_id: str, contact_id: str, mensagem: str):
         numero=contact_id,
     )
 
-    # 2. Busca histórico (últimas 20 mensagens = contexto da conversa)
+    # 3. Busca histórico
     historico = db.buscar_historico(conversa_id=ticket_id, limite=20)
 
-    # 3. Gera resposta com a Claude
+    # 4. Chama Claude com contexto do cliente
     try:
-        resposta_ia = await chamar_claude(historico)
+        resposta = await chamar_claude(historico, contexto_cliente)
     except Exception as e:
-        log.error(f"Erro ao chamar Claude: {e}")
-        resposta_ia = (
-            "Desculpe, estou com uma instabilidade no momento. "
-            "Um atendente vai entrar em contato em breve! 🙏"
-        )
+        log.error(f"Erro Claude: {e}")
+        resposta = "Desculpe, ocorreu uma instabilidade. Um atendente entrará em contato em breve!"
 
-    log.info(f"✅ Resposta gerada para ticket {ticket_id}: {resposta_ia[:100]}")
+    log.info(f"✅ Resposta ticket={ticket_id}: {resposta[:100]}")
 
-    # 4. Salva resposta da IA no histórico
+    # 5. Salva e envia resposta
     db.salvar_mensagem(
         conversa_id=ticket_id,
         papel="assistant",
-        conteudo=resposta_ia,
+        conteudo=resposta,
         numero=contact_id,
     )
 
-    # 5. Envia resposta ao cliente pela Vectax
-    await enviar_mensagem_vectax(
-        ticket_id=ticket_id,
-        contact_id=contact_id,
-        mensagem=resposta_ia,
+    await enviar_mensagem_vectax(ticket_id, contact_id, resposta)
+
+
+def _montar_contexto_cliente(numero_whatsapp: str, mensagem: str) -> str:
+    """
+    Tenta identificar o cliente pelo WhatsApp.
+    Se não encontrar, verifica se a mensagem contém um CPF.
+    Retorna uma string de contexto para ser injetada no prompt.
+    """
+
+    # Tenta pelo número de WhatsApp
+    contratos = buscar_por_whatsapp(numero_whatsapp)
+
+    # Se não achou pelo WhatsApp, tenta extrair CPF da mensagem
+    if not contratos:
+        cpf = _extrair_cpf(mensagem)
+        if cpf:
+            contratos = buscar_por_cpf(cpf)
+
+    if not contratos:
+        return (
+            "CONTEXTO DO CLIENTE:\n"
+            "Número não encontrado na base de contratos.\n"
+            "Solicite o CPF ao cliente para identificá-lo."
+        )
+
+    if len(contratos) == 1:
+        resumo = resumo_contrato(contratos[0])
+        return f"CONTEXTO DO CLIENTE:\n{json.dumps(resumo, ensure_ascii=False, indent=2)}"
+
+    # Múltiplos contratos — passa lista resumida
+    lista = []
+    for c in contratos:
+        r = resumo_contrato(c)
+        lista.append({
+            "contrato":         r["contrato"]["numero"],
+            "valor_parcela":    r["contrato"]["valor_parcela"],
+            "parcelas_atrasadas": r["situacao"]["parcelas_atrasadas"],
+            "total_devido":     r["situacao"]["total_devido"],
+        })
+
+    return (
+        f"CONTEXTO DO CLIENTE:\n"
+        f"Nome: {contratos[0]['Nome']}\n"
+        f"CPF: {contratos[0]['CPF']}\n"
+        f"Este cliente possui {len(contratos)} contratos:\n"
+        + json.dumps(lista, ensure_ascii=False, indent=2)
+        + "\nPergunte ao cliente sobre qual contrato ele deseja tratar."
     )
 
-    # 6. Registra oportunidade se detectar interesse de compra
-    if detectar_intencao_compra(mensagem):
-        log.info(f"💰 Intenção de compra detectada — criando oportunidade")
-        await registrar_oportunidade(contact_id, mensagem, ticket_id)
 
+async def chamar_claude(historico: list[dict], contexto_cliente: str) -> str:
+    """
+    Chama a Claude injetando o contexto do cliente no system prompt.
+    """
+    system = SYSTEM_PROMPT + "\n\n" + contexto_cliente
 
-async def chamar_claude(historico: list[dict]) -> str:
-    """
-    Envia o histórico completo da conversa para a Claude.
-    Cada item do histórico tem 'papel' (user/assistant) e 'conteudo'.
-    """
     mensagens = [
         {"role": msg["papel"], "content": msg["conteudo"]}
         for msg in historico
@@ -246,7 +245,7 @@ async def chamar_claude(historico: list[dict]) -> str:
     response = claude_client.messages.create(
         model="claude-sonnet-4-5",
         max_tokens=1024,
-        system=SYSTEM_PROMPT,
+        system=system,
         messages=mensagens,
     )
 
@@ -254,18 +253,13 @@ async def chamar_claude(historico: list[dict]) -> str:
 
 
 async def enviar_mensagem_vectax(ticket_id: str, contact_id: str, mensagem: str):
-    """
-    Envia a resposta da IA para o cliente via endpoint da Vectax:
-    POST /v1/api/external/{apiId}
-    """
     url = f"{VECTAX_API_URL}/v1/api/external/{VECTAX_API_ID}"
 
     payload = {
         "body": mensagem,
-        "number": contact_id,         # ID do contato na Vectax
-        "externalKey": ticket_id,     # ID do ticket — vincula ao atendimento certo
+        "number": contact_id,
+        "externalKey": ticket_id,
     }
-
     headers = {
         "Authorization": f"Bearer {VECTAX_TOKEN}",
         "Content-Type": "application/json",
@@ -274,53 +268,25 @@ async def enviar_mensagem_vectax(ticket_id: str, contact_id: str, mensagem: str)
     try:
         resp = await chatbot_client.post(url, json=payload, headers=headers)
         resp.raise_for_status()
-        log.info(f"📤 Mensagem enviada | ticket={ticket_id} status={resp.status_code}")
+        log.info(f"📤 Enviado ticket={ticket_id} status={resp.status_code}")
     except httpx.HTTPStatusError as e:
         log.error(f"Erro Vectax {e.response.status_code}: {e.response.text[:200]}")
     except Exception as e:
-        log.error(f"Falha ao enviar mensagem: {e}")
+        log.error(f"Falha envio: {e}")
 
 
 # ---------------------------------------------------------------------------
-# Detecção de intenção de compra
+# Helpers
 # ---------------------------------------------------------------------------
 
-PALAVRAS_COMPRA = [
-    "quero comprar", "quero contratar", "quanto custa", "qual o preço",
-    "tem disponível", "como faço para comprar", "quero adquirir",
-    "interesse em", "me interessa", "gostaria de comprar", "quero fechar",
-    "vou querer", "pode me passar o valor", "qual o investimento",
-]
-
-def detectar_intencao_compra(mensagem: str) -> bool:
-    texto = mensagem.lower()
-    return any(palavra in texto for palavra in PALAVRAS_COMPRA)
-
-
-async def registrar_oportunidade(contact_id: str, mensagem: str, ticket_id: str):
+def _extrair_cpf(texto: str) -> Optional[str]:
     """
-    Cria uma oportunidade no CRM da Vectax automaticamente.
-    Configure os IDs padrão no .env conforme sua conta.
+    Tenta extrair um CPF de um texto.
+    Aceita formatos: 012.345.678-90 ou 01234567890
     """
-    url = f"{VECTAX_API_URL}/v1/api/external/{VECTAX_API_ID}/opportunities"
-
-    payload = {
-        "name": f"Lead via chatbot — contato {contact_id}",
-        "description": f"Interesse detectado automaticamente.\nMensagem: {mensagem[:300]}",
-        "contactId": int(os.getenv("DEFAULT_CONTACT_ID", "1")),
-        "responsibleId": os.getenv("DEFAULT_RESPONSIBLE_ID", "1"),
-        "pipelineStepId": int(os.getenv("DEFAULT_PIPELINE_STEP_ID", "1")),
-        "userId": os.getenv("DEFAULT_USER_ID", "1"),
-    }
-
-    headers = {
-        "Authorization": f"Bearer {VECTAX_TOKEN}",
-        "Content-Type": "application/json",
-    }
-
-    try:
-        resp = await chatbot_client.post(url, json=payload, headers=headers)
-        resp.raise_for_status()
-        log.info(f"🎯 Oportunidade criada para contato {contact_id}")
-    except Exception as e:
-        log.error(f"Erro ao criar oportunidade: {e}")
+    import re
+    # Com formatação
+    m = re.search(r"\d{3}[\.\s]?\d{3}[\.\s]?\d{3}[-\s]?\d{2}", texto)
+    if m:
+        return re.sub(r"\D", "", m.group())
+    return None
