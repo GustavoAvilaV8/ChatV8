@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: chatbot-ia-claude
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: VECTAX_API_URL
+        sync: false
+      - key: VECTAX_API_ID
+        sync: false
+      - key: VECTAX_TOKEN
+        sync: false
+      - key: NUMEROS_TESTE
+        sync: false
+      - key: DEFAULT_CONTACT_ID
+        sync: false
+      - key: DEFAULT_RESPONSIBLE_ID
+        sync: false
+      - key: DEFAULT_PIPELINE_STEP_ID
+        sync: false
+      - key: DEFAULT_USER_ID
+        sync: false
