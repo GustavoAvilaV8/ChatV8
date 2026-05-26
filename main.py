@@ -312,13 +312,17 @@ async def chamar_claude(historico: list[dict], contexto: str) -> str:
 async def enviar_mensagem_vectax(ticket_id: str, numero: str, mensagem: str, contact_id: str = ""):
     url = f"{VECTAX_API_URL}/v1/api/external/{VECTAX_API_ID}"
 
-    # Tenta primeiro com o número real do WhatsApp
-    # O externalKey deve ser único por conversa — usamos ticket_id
+    # A Vectax cadastra o contato sem o 9 (formato antigo de 8 dígitos)
+    # Precisamos enviar no mesmo formato que ela tem internamente
+    # Ex: 5547920020302 → 554720020302 (remove o 9 após DDD)
+    numero_vectax = _remover_nono_digito(numero)
+
     payload = {
         "body":        mensagem,
-        "number":      numero,
+        "number":      numero_vectax,
         "externalKey": f"ticket_{ticket_id}",
     }
+    log.info(f"📤 Enviando numero_vectax={numero_vectax} (original={numero})")
     headers = {"Authorization": f"Bearer {VECTAX_TOKEN}", "Content-Type": "application/json"}
 
     try:
@@ -363,9 +367,22 @@ def _normalizar_numero_br(numero: str) -> str:
     Formato esperado: 55 + DDD (2) + 9 + número (8) = 13 dígitos
     Sem o 9:          55 + DDD (2) + número (8)     = 12 dígitos
     """
-    n = re.sub(r"\D", "", numero)
-    # Se começa com 55 e tem 12 dígitos → falta o 9
+    import re as _re
+    n = _re.sub(r"\D", "", numero)
     if n.startswith("55") and len(n) == 12:
-        # Insere o 9 após o DDD (posição 4)
         n = n[:4] + "9" + n[4:]
+    return n
+
+
+def _remover_nono_digito(numero: str) -> str:
+    """
+    Remove o 9 dígito do número para envio à Vectax.
+    A Vectax cadastra contatos no formato antigo sem o 9.
+    Ex: 5547920020302 (13 dígitos) → 554720020302 (12 dígitos)
+    """
+    import re as _re
+    n = _re.sub(r"\D", "", numero)
+    # Se começa com 55, tem 13 dígitos e o 5º dígito é 9 → remove o 9
+    if n.startswith("55") and len(n) == 13 and n[4] == "9":
+        n = n[:4] + n[5:]
     return n
