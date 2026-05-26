@@ -330,7 +330,7 @@ async def enviar_mensagem_vectax(ticket_id: str, numero: str, mensagem: str, con
 
     # Usa o ticket_id como externalKey — assim nas próximas mensagens
     # do mesmo ticket a Vectax encontra e não cria um novo
-    external_key = ticket_id
+    external_key = _remover_nono_digito(numero)
 
     payload = {
         "body":        mensagem,
@@ -340,7 +340,8 @@ async def enviar_mensagem_vectax(ticket_id: str, numero: str, mensagem: str, con
     headers = {"Authorization": f"Bearer {VECTAX_TOKEN}", "Content-Type": "application/json"}
 
     try:
-        resp = await chatbot_client.post(url, json=payload, headers=headers)
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(url, json=payload, headers=headers)
         log.info(f"📤 Enviado ticket={ticket_id} numero={numero} externalKey={external_key} status={resp.status_code}")
     except Exception as e:
         log.error(f"Falha envio: {e}")
