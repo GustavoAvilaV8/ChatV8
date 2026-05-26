@@ -51,6 +51,12 @@ VECTAX_TOKEN   = os.getenv("VECTAX_TOKEN")
 QUALIDADE_API_URL    = os.getenv("QUALIDADE_API_URL", "https://qualidadev8.onrender.com")
 QUALIDADE_API_SECRET = os.getenv("QUALIDADE_API_SECRET", "dev-secret")
 
+# Vectax Front API — token de login (expira em 3 dias, renovar automaticamente)
+VECTAX_FRONT_TOKEN = os.getenv("VECTAX_FRONT_TOKEN", "")
+VECTAX_FRONT_URL   = "https://enterprise-369api.v8sistema.com"
+VECTAX_LOGIN_EMAIL = os.getenv("VECTAX_LOGIN_EMAIL", "")
+VECTAX_LOGIN_PASS  = os.getenv("VECTAX_LOGIN_PASS", "")
+
 db = ConversationDB("conversas.db")
 
 # ---------------------------------------------------------------------------
@@ -189,17 +195,19 @@ async def receber_webhook(request: Request):
 
 async def processar_mensagem(ticket_id: str, contact_id: str, numero_whatsapp: str, mensagem: str):
 
-    # 0. Seta externalKey no ticket do cliente via onlyNote (sem enviar mensagem)
-    await _setar_external_key_ticket(ticket_id, numero_whatsapp)
+    # 0. Busca o ticket correto via API do front da Vectax
+    ticket_id_real = await _buscar_ticket_aberto(numero_whatsapp, ticket_id)
+    if ticket_id_real != ticket_id:
+        log.info(f"🎯 Usando ticket real={ticket_id_real} em vez de ticket={ticket_id}")
 
     # 1. Monta contexto do cliente consultando o qualidadev8
-    contexto = await _montar_contexto(numero_whatsapp, mensagem, ticket_id)
+    contexto = await _montar_contexto(numero_whatsapp, mensagem, ticket_id_real)
 
     # 2. Salva mensagem do cliente
-    db.salvar_mensagem(conversa_id=ticket_id, papel="user", conteudo=mensagem, numero=contact_id)
+    db.salvar_mensagem(conversa_id=ticket_id_real, papel="user", conteudo=mensagem, numero=contact_id)
 
     # 3. Busca histórico
-    historico = db.buscar_historico(conversa_id=ticket_id, limite=20)
+    historico = db.buscar_historico(conversa_id=ticket_id_real, limite=20)
 
     # 4. Chama Claude
     try:
@@ -208,11 +216,11 @@ async def processar_mensagem(ticket_id: str, contact_id: str, numero_whatsapp: s
         log.error(f"Erro Claude: {e}")
         resposta = "Desculpe, ocorreu uma instabilidade. Um atendente entrará em contato em breve!"
 
-    log.info(f"✅ ticket={ticket_id}: {resposta[:100]}")
+    log.info(f"✅ ticket={ticket_id_real}: {resposta[:100]}")
 
     # 5. Salva e envia
-    db.salvar_mensagem(conversa_id=ticket_id, papel="assistant", conteudo=resposta, numero=contact_id)
-    await enviar_mensagem_vectax(ticket_id, numero_whatsapp, resposta, contact_id)
+    db.salvar_mensagem(conversa_id=ticket_id_real, papel="assistant", conteudo=resposta, numero=contact_id)
+    await enviar_mensagem_vectax(ticket_id_real, numero_whatsapp, resposta, contact_id)
 
 
 async def _montar_contexto(numero_whatsapp: str, mensagem: str, ticket_id: str) -> str:
@@ -344,30 +352,94 @@ async def enviar_mensagem_vectax(ticket_id: str, numero: str, mensagem: str, con
 
 async def _setar_external_key_ticket(ticket_id: str, numero: str):
     """
-    Usa onlyNote=true para registrar o externalKey no ticket do cliente
-    sem enviar mensagem ao cliente.
-    Tenta com o número com e sem o 9 para garantir que encontra o contato.
+    Busca o ticket aberto do cliente via API do front da Vectax.
+    Se encontrar um ticket aberto com externalKey nulo, usa o ticketId
+    do cliente para responder no ticket correto.
+    Retorna o ticketId correto para usar no envio.
     """
-    url = f"{VECTAX_API_URL}/v1/api/external/{VECTAX_API_ID}"
-    headers = {"Authorization": f"Bearer {VECTAX_TOKEN}", "Content-Type": "application/json"}
+    # Por enquanto mantém o ticket_id recebido
+    # A busca via front API será implementada quando o token estiver configurado
+    pass
 
-    # Tenta com o número com o 9 e sem o 9
-    numeros = [numero, _remover_nono_digito(numero)]
 
-    for num in numeros:
-        payload = {
-            "body":        f"ref:{ticket_id}",
-            "number":      num,
-            "externalKey": ticket_id,
-            "onlyNote":    True,
-        }
-        try:
-            resp = await chatbot_client.post(url, json=payload, headers=headers)
-            log.info(f"🔑 externalKey setado ticket={ticket_id} numero={num} status={resp.status_code} body={resp.text[:100]}")
-            if resp.status_code == 200:
-                break
-        except Exception as e:
-            log.warning(f"Falha ao setar externalKey numero={num}: {e}")
+async def _buscar_ticket_aberto(numero: str, ticket_id_atual: str) -> str:
+    """
+    Busca tickets abertos pelo número do cliente via API do front.
+    Retorna o ticketId mais recente encontrado.
+    """
+    if not VECTAX_FRONT_TOKEN:
+        return ticket_id_atual
+
+    token = await _obter_token_front()
+    if not token:
+        return ticket_id_atual
+
+    from datetime import datetime, timedelta
+    hoje = datetime.now()
+    ontem = hoje - timedelta(days=30)
+
+    url = f"{VECTAX_FRONT_URL}/tickets-search"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "Origin": "https://chat.v8sistema.com",
+        "Referer": "https://chat.v8sistema.com/",
+    }
+    payload = {
+        "contactName": "",
+        "contact": numero,
+        "startDate": ontem.strftime("%Y-%m-%dT00:00:00"),
+        "endDate": hoje.strftime("%Y-%m-%dT23:59:59"),
+        "status": ["open", "pending"],
+        "bots": [], "channels": [], "closingReasons": [],
+        "isActiveDemand": None, "isCreatedDate": True,
+        "isNotPagination": True, "notas": [], "pageNumber": 1,
+        "protocolNumber": "", "queues": [], "tags": [], "users": [],
+    }
+
+    try:
+        resp = await chatbot_client.post(url, json=payload, headers=headers)
+        log.info(f"🔍 tickets-search status={resp.status_code}")
+        if resp.status_code == 200:
+            data = resp.json()
+            tickets = data if isinstance(data, list) else data.get("tickets", [])
+            if tickets:
+                # Retorna o ticket mais recente
+                ticket = sorted(tickets, key=lambda t: t.get("createdAt", ""), reverse=True)[0]
+                tid = str(ticket.get("id", ticket_id_atual))
+                log.info(f"🎯 Ticket encontrado: {tid} (atual: {ticket_id_atual})")
+                return tid
+    except Exception as e:
+        log.warning(f"Falha na busca de ticket: {e}")
+
+    return ticket_id_atual
+
+
+async def _obter_token_front() -> str:
+    """
+    Obtém ou renova o token do front da Vectax.
+    Usa o token configurado na variável de ambiente ou faz login.
+    """
+    # Se tiver token configurado, usa ele
+    if VECTAX_FRONT_TOKEN:
+        return VECTAX_FRONT_TOKEN
+
+    # Senão, faz login para obter token
+    if not VECTAX_LOGIN_EMAIL or not VECTAX_LOGIN_PASS:
+        return ""
+
+    try:
+        resp = await chatbot_client.post(
+            f"{VECTAX_FRONT_URL}/auth/login",
+            json={"email": VECTAX_LOGIN_EMAIL, "password": VECTAX_LOGIN_PASS},
+            headers={"Content-Type": "application/json"},
+        )
+        if resp.status_code == 200:
+            return resp.json().get("token", "")
+    except Exception as e:
+        log.error(f"Falha no login Vectax front: {e}")
+
+    return ""
 
 
 async def _consultar_api(path: str) -> Optional[dict]:
