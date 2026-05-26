@@ -312,19 +312,14 @@ async def chamar_claude(historico: list[dict], contexto: str) -> str:
 async def enviar_mensagem_vectax(ticket_id: str, numero: str, mensagem: str, contact_id: str = ""):
     url = f"{VECTAX_API_URL}/v1/api/external/{VECTAX_API_ID}"
 
-    # A Vectax cadastra o contato sem o 9 (formato antigo de 8 dígitos)
-    # Precisamos enviar no mesmo formato que ela tem internamente
-    # Ex: 5547920020302 → 554720020302 (remove o 9 após DDD)
-    numero_vectax = _remover_nono_digito(numero)
-
-    # Usa o número sem o 9 como externalKey — garante que sempre cai no mesmo ticket
-    # A Vectax vincula tickets pelo externalKey, então deve ser consistente por número
+    # Usa o número com o 9 (formato correto) e externalKey baseado no número
+    # Isso garante que sempre cai no mesmo ticket por número de WhatsApp
     payload = {
         "body":        mensagem,
-        "number":      numero_vectax,
-        "externalKey": numero_vectax,
+        "number":      numero,
+        "externalKey": numero,
     }
-    log.info(f"📤 Enviando numero_vectax={numero_vectax} externalKey={numero_vectax}")
+    log.info(f"📤 Enviando number={numero} externalKey={numero}")
     headers = {"Authorization": f"Bearer {VECTAX_TOKEN}", "Content-Type": "application/json"}
 
     try:
