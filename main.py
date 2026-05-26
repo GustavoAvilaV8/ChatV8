@@ -163,7 +163,9 @@ async def receber_webhook(request: Request):
     numero_raw = _normalizar_numero_br(numero_raw)
     log.info(f"📞 numero normalizado={numero_raw}")
 
-    if from_me or send_type in ("bot", "API") or is_note or not body:
+    # raw=None indica webhook de ACK/confirmação de entrega — não é mensagem do cliente
+    raw_vazio = not raw_obj or raw_obj == {} or raw_obj == "{}"
+    if from_me or send_type in ("bot", "API") or is_note or not body or raw_vazio:
         return JSONResponse({"ok": True, "ignorado": "filtrado"})
 
     if not ticket_id or not contact_id:
