@@ -190,7 +190,6 @@ async def receber_webhook(request: Request):
 async def processar_mensagem(ticket_id: str, contact_id: str, numero_whatsapp: str, mensagem: str):
 
     # 0. Seta externalKey no ticket do cliente via onlyNote (sem enviar mensagem)
-    # Isso garante que a Vectax encontre o ticket existente na hora do envio
     await _setar_external_key_ticket(ticket_id, numero_whatsapp)
 
     # 1. Monta contexto do cliente consultando o qualidadev8
