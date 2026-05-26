@@ -158,6 +158,11 @@ async def receber_webhook(request: Request):
     )
     log.info(f"📞 numero={numero_raw} (raw={raw_obj.get('from')} contact={contact_obj.get('number')})")
 
+    # Normaliza número brasileiro — garante o 9 no celular
+    # Ex: 554784141181 (11 dígitos sem 9) → 5547984141181 (12 dígitos com 9)
+    numero_raw = _normalizar_numero_br(numero_raw)
+    log.info(f"📞 numero normalizado={numero_raw}")
+
     if from_me or send_type in ("bot", "API") or is_note or not body:
         return JSONResponse({"ok": True, "ignorado": "filtrado"})
 
@@ -340,3 +345,17 @@ def _extrair_cpf(texto: str) -> Optional[str]:
     if m:
         return re.sub(r"\D", "", m.group())
     return None
+
+
+def _normalizar_numero_br(numero: str) -> str:
+    """
+    Garante que o número celular brasileiro tenha o 9 dígito.
+    Formato esperado: 55 + DDD (2) + 9 + número (8) = 13 dígitos
+    Sem o 9:          55 + DDD (2) + número (8)     = 12 dígitos
+    """
+    n = re.sub(r"\D", "", numero)
+    # Se começa com 55 e tem 12 dígitos → falta o 9
+    if n.startswith("55") and len(n) == 12:
+        # Insere o 9 após o DDD (posição 4)
+        n = n[:4] + "9" + n[4:]
+    return n
