@@ -317,12 +317,14 @@ async def enviar_mensagem_vectax(ticket_id: str, numero: str, mensagem: str, con
     # Ex: 5547920020302 → 554720020302 (remove o 9 após DDD)
     numero_vectax = _remover_nono_digito(numero)
 
+    # Usa o número sem o 9 como externalKey — garante que sempre cai no mesmo ticket
+    # A Vectax vincula tickets pelo externalKey, então deve ser consistente por número
     payload = {
         "body":        mensagem,
         "number":      numero_vectax,
-        "externalKey": f"ticket_{ticket_id}",
+        "externalKey": numero_vectax,
     }
-    log.info(f"📤 Enviando numero_vectax={numero_vectax} (original={numero})")
+    log.info(f"📤 Enviando numero_vectax={numero_vectax} externalKey={numero_vectax}")
     headers = {"Authorization": f"Bearer {VECTAX_TOKEN}", "Content-Type": "application/json"}
 
     try:
