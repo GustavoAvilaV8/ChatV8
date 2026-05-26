@@ -154,14 +154,13 @@ async def receber_webhook(request: Request):
 
     # Número real do WhatsApp — prioriza raw.from (sempre tem o número real)
     # contact.number pode ser ID interno quando contato não está cadastrado
-    ticket_obj  = msg.get("ticket", {})
-    contact_obj = ticket_obj.get("contact", {})
-    raw_obj     = msg.get("raw", {})
-    numero_raw  = str(
-        raw_obj.get("from")
-        or contact_obj.get("number")
-        or contact_id
-    )
+    ticket_obj   = msg.get("ticket", {})
+    contact_obj  = ticket_obj.get("contact", {})
+    raw_obj      = msg.get("raw", {})
+    # raw.from = número real do WhatsApp (com o 9)
+    # contact.number = número cadastrado na Vectax (pode ser sem o 9)
+    numero_raw       = str(raw_obj.get("from") or contact_obj.get("number") or contact_id)
+    numero_vectax    = str(contact_obj.get("number") or numero_raw)  # como a Vectax cadastrou
     log.info(f"📞 numero={numero_raw} (raw={raw_obj.get('from')} contact={contact_obj.get('number')})")
 
     # Normaliza número brasileiro — garante o 9 no celular
@@ -183,6 +182,7 @@ async def receber_webhook(request: Request):
         ticket_id=ticket_id,
         contact_id=contact_id,
         numero_whatsapp=numero_raw,
+        numero_vectax=numero_vectax,
         mensagem=body,
     )
 
@@ -193,7 +193,7 @@ async def receber_webhook(request: Request):
 # Lógica principal
 # ---------------------------------------------------------------------------
 
-async def processar_mensagem(ticket_id: str, contact_id: str, numero_whatsapp: str, mensagem: str):
+async def processar_mensagem(ticket_id: str, contact_id: str, numero_whatsapp: str, mensagem: str, numero_vectax: str = ""):
 
     # 0. Busca o ticket correto via API do front da Vectax
     ticket_id_real = await _buscar_ticket_aberto(numero_whatsapp, ticket_id)
@@ -220,7 +220,7 @@ async def processar_mensagem(ticket_id: str, contact_id: str, numero_whatsapp: s
 
     # 5. Salva e envia
     db.salvar_mensagem(conversa_id=ticket_id_real, papel="assistant", conteudo=resposta, numero=contact_id)
-    await enviar_mensagem_vectax(ticket_id_real, numero_whatsapp, resposta, contact_id)
+    await enviar_mensagem_vectax(ticket_id_real, numero_whatsapp, resposta, contact_id, numero_vectax or numero_whatsapp)
 
 
 async def _montar_contexto(numero_whatsapp: str, mensagem: str, ticket_id: str) -> str:
@@ -320,7 +320,7 @@ async def chamar_claude(historico: list[dict], contexto: str) -> str:
     return response.content[0].text
 
 
-async def enviar_mensagem_vectax(ticket_id: str, numero: str, mensagem: str, contact_id: str = ""):
+async def enviar_mensagem_vectax(ticket_id: str, numero: str, mensagem: str, contact_id: str = "", numero_vectax: str = ""):
     """
     Envia mensagem via API externa da Vectax.
     Usa o número como externalKey para que nas próximas mensagens
@@ -330,11 +330,14 @@ async def enviar_mensagem_vectax(ticket_id: str, numero: str, mensagem: str, con
 
     # Usa o ticket_id como externalKey — assim nas próximas mensagens
     # do mesmo ticket a Vectax encontra e não cria um novo
-    external_key = _remover_nono_digito(numero)
+    # Usa o número exatamente como a Vectax cadastrou o contato
+    numero_envio = numero_vectax if numero_vectax else _remover_nono_digito(numero)
+    external_key = numero_envio
+    log.info(f"📤 numero_envio={numero_envio} (whatsapp={numero} vectax={numero_vectax})")
 
     payload = {
         "body":        mensagem,
-        "number":      numero,
+        "number":      numero_envio,
         "externalKey": external_key,
     }
     headers = {"Authorization": f"Bearer {VECTAX_TOKEN}", "Content-Type": "application/json"}
