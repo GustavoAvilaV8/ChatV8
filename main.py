@@ -169,7 +169,7 @@ async def receber_webhook(request: Request):
     if not ticket_id or not contact_id:
         return JSONResponse({"ok": True, "ignorado": "sem identificadores"})
 
-    log.info(f"✉ ticket={ticket_id} numero={numero_raw} | {body[:80]}")
+    log.info(f"✉ ticket={ticket_id} numero={numero_raw} fromMe={from_me} sendType={send_type} | {body[:80]}")
 
     await processar_mensagem(
         ticket_id=ticket_id,
