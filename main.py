@@ -40,7 +40,7 @@ log = logging.getLogger(__name__)
 app = FastAPI(title="Cobrança V8 Digital — Claude IA", version="4.0.0")
 
 claude_client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-chatbot_client = httpx.AsyncClient(timeout=30)
+# Cliente HTTP criado por requisição para evitar conexões expiradas
 
 # Vectax
 VECTAX_API_URL = os.getenv("VECTAX_API_URL", "https://enterprise-369api.v8sistema.com")
@@ -398,7 +398,8 @@ async def _buscar_ticket_aberto(numero: str, ticket_id_atual: str) -> str:
     }
 
     try:
-        resp = await chatbot_client.post(url, json=payload, headers=headers)
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(url, json=payload, headers=headers)
         log.info(f"🔍 tickets-search status={resp.status_code}")
         if resp.status_code == 200:
             data = resp.json()
@@ -429,11 +430,12 @@ async def _obter_token_front() -> str:
         return ""
 
     try:
-        resp = await chatbot_client.post(
-            f"{VECTAX_FRONT_URL}/auth/login",
-            json={"email": VECTAX_LOGIN_EMAIL, "password": VECTAX_LOGIN_PASS},
-            headers={"Content-Type": "application/json"},
-        )
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(
+                f"{VECTAX_FRONT_URL}/auth/login",
+                json={"email": VECTAX_LOGIN_EMAIL, "password": VECTAX_LOGIN_PASS},
+                headers={"Content-Type": "application/json"},
+            )
         if resp.status_code == 200:
             return resp.json().get("token", "")
     except Exception as e:
@@ -447,7 +449,8 @@ async def _consultar_api(path: str) -> Optional[dict]:
     url = f"{QUALIDADE_API_URL}{path}"
     headers = {"X-API-Key": QUALIDADE_API_SECRET}
     try:
-        resp = await chatbot_client.get(url, headers=headers, timeout=10)
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(url, headers=headers)
         if resp.status_code == 200:
             return resp.json()
         log.warning(f"API qualidadev8 {resp.status_code}: {path}")
