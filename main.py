@@ -310,27 +310,53 @@ async def chamar_claude(historico: list[dict], contexto: str) -> str:
 
 
 async def enviar_mensagem_vectax(ticket_id: str, numero: str, mensagem: str, contact_id: str = ""):
-    url = f"{VECTAX_API_URL}/v1/api/external/{VECTAX_API_ID}"
+    """
+    Tenta enviar pelo endpoint interno primeiro (garante o ticket correto),
+    se falhar usa a API externa como fallback.
+    """
+    # Tenta API interna — envia diretamente no ticket sem criar um novo
+    enviado = await _enviar_via_api_interna(ticket_id, mensagem)
+    if not enviado:
+        # Fallback: API externa
+        await _enviar_via_api_externa(ticket_id, numero, mensagem)
 
-    # Usa o número do cliente e o ticket_id como externalKey
-    # O número deve ser o mesmo que a Vectax tem cadastrado para o contato
-    # Envia com o número completo com o 9 — formato do contato real na Vectax
-    payload = {
-        "body":        mensagem,
-        "number":      numero,
-        "externalKey": ticket_id,
-    }
-    log.info(f"📤 Enviando number={numero} externalKey={ticket_id}")
+
+async def _enviar_via_api_interna(ticket_id: str, mensagem: str) -> bool:
+    """
+    API interna da Vectax — envia mensagem no ticket específico.
+    Testa vários endpoints possíveis.
+    """
     headers = {"Authorization": f"Bearer {VECTAX_TOKEN}", "Content-Type": "application/json"}
+    payload = {"body": mensagem}
 
+    endpoints = [
+        f"{VECTAX_API_URL}/api/messages/{ticket_id}",
+        f"{VECTAX_API_URL}/api/tickets/{ticket_id}/messages",
+        f"{VECTAX_API_URL}/tickets/{ticket_id}/messages",
+    ]
+
+    for url in endpoints:
+        try:
+            resp = await chatbot_client.post(url, json=payload, headers=headers)
+            log.info(f"📤 API interna {url} status={resp.status_code} body={resp.text[:200]}")
+            if resp.status_code in (200, 201):
+                return True
+        except Exception as e:
+            log.warning(f"API interna {url} falhou: {e}")
+
+    return False
+
+
+async def _enviar_via_api_externa(ticket_id: str, numero: str, mensagem: str):
+    """Fallback: API externa da Vectax."""
+    url = f"{VECTAX_API_URL}/v1/api/external/{VECTAX_API_ID}"
+    payload = {"body": mensagem, "number": numero, "externalKey": ticket_id}
+    headers = {"Authorization": f"Bearer {VECTAX_TOKEN}", "Content-Type": "application/json"}
     try:
         resp = await chatbot_client.post(url, json=payload, headers=headers)
-        log.info(f"📤 Enviado ticket={ticket_id} numero={numero} status={resp.status_code} body={resp.text[:200]}")
-        resp.raise_for_status()
-    except httpx.HTTPStatusError as e:
-        log.error(f"Erro Vectax {e.response.status_code}: {e.response.text[:200]}")
+        log.info(f"📤 API externa ticket={ticket_id} status={resp.status_code} body={resp.text[:200]}")
     except Exception as e:
-        log.error(f"Falha envio: {e}")
+        log.error(f"Falha envio API externa: {e}")
 
 
 # ---------------------------------------------------------------------------
