@@ -346,22 +346,29 @@ async def enviar_mensagem_vectax(ticket_id: str, numero: str, mensagem: str, con
 async def _setar_external_key_ticket(ticket_id: str, numero: str):
     """
     Usa onlyNote=true para registrar o externalKey no ticket do cliente
-    sem enviar mensagem. Isso permite que a próxima resposta do bot
-    seja vinculada ao ticket correto pela Vectax.
+    sem enviar mensagem ao cliente.
+    Tenta com o número com e sem o 9 para garantir que encontra o contato.
     """
     url = f"{VECTAX_API_URL}/v1/api/external/{VECTAX_API_ID}"
-    payload = {
-        "body":        f"ticket_{ticket_id}",
-        "number":      numero,
-        "externalKey": ticket_id,
-        "onlyNote":    True,
-    }
     headers = {"Authorization": f"Bearer {VECTAX_TOKEN}", "Content-Type": "application/json"}
-    try:
-        resp = await chatbot_client.post(url, json=payload, headers=headers)
-        log.info(f"🔑 externalKey setado ticket={ticket_id} status={resp.status_code}")
-    except Exception as e:
-        log.warning(f"Falha ao setar externalKey: {e}")
+
+    # Tenta com o número com o 9 e sem o 9
+    numeros = [numero, _remover_nono_digito(numero)]
+
+    for num in numeros:
+        payload = {
+            "body":        f"ref:{ticket_id}",
+            "number":      num,
+            "externalKey": ticket_id,
+            "onlyNote":    True,
+        }
+        try:
+            resp = await chatbot_client.post(url, json=payload, headers=headers)
+            log.info(f"🔑 externalKey setado ticket={ticket_id} numero={num} status={resp.status_code} body={resp.text[:100]}")
+            if resp.status_code == 200:
+                break
+        except Exception as e:
+            log.warning(f"Falha ao setar externalKey numero={num}: {e}")
 
 
 async def _consultar_api(path: str) -> Optional[dict]:
