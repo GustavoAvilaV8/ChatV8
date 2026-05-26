@@ -161,7 +161,7 @@ async def receber_webhook(request: Request):
     # Normaliza número brasileiro — garante o 9 no celular
     # Ex: 554784141181 (11 dígitos sem 9) → 5547984141181 (12 dígitos com 9)
     numero_raw = _normalizar_numero_br(numero_raw)
-    log.info(f"📞 numero normalizado={numero_raw}")
+    log.info(f"📞 numero normalizado={numero_raw} raw_obj={raw_obj} raw_vazio={not raw_obj or raw_obj == {} or raw_obj == "{}"}")
 
     # raw=None indica webhook de ACK/confirmação de entrega — não é mensagem do cliente
     raw_vazio = not raw_obj or raw_obj == {} or raw_obj == "{}"
