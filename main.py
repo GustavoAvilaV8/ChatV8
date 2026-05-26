@@ -189,6 +189,10 @@ async def receber_webhook(request: Request):
 
 async def processar_mensagem(ticket_id: str, contact_id: str, numero_whatsapp: str, mensagem: str):
 
+    # 0. Seta externalKey no ticket do cliente via onlyNote (sem enviar mensagem)
+    # Isso garante que a Vectax encontre o ticket existente na hora do envio
+    await _setar_external_key_ticket(ticket_id, numero_whatsapp)
+
     # 1. Monta contexto do cliente consultando o qualidadev8
     contexto = await _montar_contexto(numero_whatsapp, mensagem, ticket_id)
 
@@ -311,57 +315,54 @@ async def chamar_claude(historico: list[dict], contexto: str) -> str:
 
 async def enviar_mensagem_vectax(ticket_id: str, numero: str, mensagem: str, contact_id: str = ""):
     """
-    Tenta enviar pelo endpoint interno primeiro (garante o ticket correto),
-    se falhar usa a API externa como fallback.
+    Envia mensagem via API externa da Vectax.
+    Usa o número como externalKey para que nas próximas mensagens
+    a Vectax encontre o mesmo ticket e não crie um novo.
     """
-    # Tenta API interna — envia diretamente no ticket sem criar um novo
-    enviado = await _enviar_via_api_interna(ticket_id, mensagem)
-    if not enviado:
-        # Fallback: API externa
-        await _enviar_via_api_externa(ticket_id, numero, mensagem)
-
-
-async def _enviar_via_api_interna(ticket_id: str, mensagem: str) -> bool:
-    """
-    API interna da Vectax — envia mensagem no ticket específico.
-    Testa vários endpoints possíveis.
-    """
-    headers = {"Authorization": f"Bearer {VECTAX_TOKEN}", "Content-Type": "application/json"}
-    payload = {"body": mensagem}
-
-    endpoints = [
-        f"{VECTAX_API_URL}/api/messages/{ticket_id}",
-        f"{VECTAX_API_URL}/api/tickets/{ticket_id}/messages",
-        f"{VECTAX_API_URL}/tickets/{ticket_id}/messages",
-    ]
-
-    for url in endpoints:
-        try:
-            resp = await chatbot_client.post(url, json=payload, headers=headers)
-            log.info(f"📤 API interna {url} status={resp.status_code} body={resp.text[:200]}")
-            if resp.status_code in (200, 201):
-                return True
-        except Exception as e:
-            log.warning(f"API interna {url} falhou: {e}")
-
-    return False
-
-
-async def _enviar_via_api_externa(ticket_id: str, numero: str, mensagem: str):
-    """Fallback: API externa da Vectax."""
     url = f"{VECTAX_API_URL}/v1/api/external/{VECTAX_API_ID}"
-    payload = {"body": mensagem, "number": numero, "externalKey": ticket_id}
+
+    # Usa o ticket_id como externalKey — assim nas próximas mensagens
+    # do mesmo ticket a Vectax encontra e não cria um novo
+    external_key = ticket_id
+
+    payload = {
+        "body":        mensagem,
+        "number":      numero,
+        "externalKey": external_key,
+    }
     headers = {"Authorization": f"Bearer {VECTAX_TOKEN}", "Content-Type": "application/json"}
+
     try:
         resp = await chatbot_client.post(url, json=payload, headers=headers)
-        log.info(f"📤 API externa ticket={ticket_id} status={resp.status_code} body={resp.text[:200]}")
+        log.info(f"📤 Enviado ticket={ticket_id} numero={numero} externalKey={external_key} status={resp.status_code}")
     except Exception as e:
-        log.error(f"Falha envio API externa: {e}")
+        log.error(f"Falha envio: {e}")
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+async def _setar_external_key_ticket(ticket_id: str, numero: str):
+    """
+    Usa onlyNote=true para registrar o externalKey no ticket do cliente
+    sem enviar mensagem. Isso permite que a próxima resposta do bot
+    seja vinculada ao ticket correto pela Vectax.
+    """
+    url = f"{VECTAX_API_URL}/v1/api/external/{VECTAX_API_ID}"
+    payload = {
+        "body":        f"ticket_{ticket_id}",
+        "number":      numero,
+        "externalKey": ticket_id,
+        "onlyNote":    True,
+    }
+    headers = {"Authorization": f"Bearer {VECTAX_TOKEN}", "Content-Type": "application/json"}
+    try:
+        resp = await chatbot_client.post(url, json=payload, headers=headers)
+        log.info(f"🔑 externalKey setado ticket={ticket_id} status={resp.status_code}")
+    except Exception as e:
+        log.warning(f"Falha ao setar externalKey: {e}")
+
 
 async def _consultar_api(path: str) -> Optional[dict]:
     """Faz uma requisição autenticada para a API do qualidadev8."""
