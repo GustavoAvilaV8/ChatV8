@@ -158,7 +158,7 @@ async def receber_webhook(request: Request):
     )
     log.info(f"📞 numero={numero_raw} (raw={raw_obj.get('from')} contact={contact_obj.get('number')})")
 
-    if from_me or send_type == "bot" or is_note or not body:
+    if from_me or send_type in ("bot", "API") or is_note or not body:
         return JSONResponse({"ok": True, "ignorado": "filtrado"})
 
     if not ticket_id or not contact_id:
