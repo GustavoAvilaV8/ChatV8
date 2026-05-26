@@ -314,14 +314,13 @@ async def enviar_mensagem_vectax(ticket_id: str, numero: str, mensagem: str, con
 
     # Usa o número do cliente e o ticket_id como externalKey
     # O número deve ser o mesmo que a Vectax tem cadastrado para o contato
-    # Vectax cadastra contatos sem o 9 no WABA — precisa enviar no mesmo formato
-    numero_sem9 = _remover_nono_digito(numero)
+    # Envia com o número completo com o 9 — formato do contato real na Vectax
     payload = {
         "body":        mensagem,
-        "number":      numero_sem9,
+        "number":      numero,
         "externalKey": ticket_id,
     }
-    log.info(f"📤 Enviando number={numero_sem9} externalKey={ticket_id} (original={numero})")
+    log.info(f"📤 Enviando number={numero} externalKey={ticket_id}")
     headers = {"Authorization": f"Bearer {VECTAX_TOKEN}", "Content-Type": "application/json"}
 
     try:
