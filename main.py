@@ -341,10 +341,15 @@ async def enviar_mensagem_vectax(ticket_id: str, numero: str, mensagem: str, con
 
     # Usa o ticket_id como externalKey — assim nas próximas mensagens
     # do mesmo ticket a Vectax encontra e não cria um novo
-    # Sempre envia sem o 9 — a Vectax usa esse formato para o WABA
-    numero_envio = _remover_nono_digito(numero)
+    # Busca o número exato como a Vectax cadastrou (via NewContact)
+    numero_salvo = db.buscar_numero_contato(contact_id) if contact_id else ""
+    if numero_salvo:
+        numero_envio = numero_salvo
+    else:
+        # Fallback: usa o número do raw sem o 9 se tiver 13 dígitos
+        numero_envio = _remover_nono_digito(numero)
     external_key = numero_envio
-    log.info(f"📤 numero_envio={numero_envio} (original={numero})")
+    log.info(f"📤 numero_envio={numero_envio} (salvo={numero_salvo} original={numero})")
 
     payload = {
         "body":        mensagem,
@@ -497,13 +502,15 @@ def _normalizar_numero_br(numero: str) -> str:
 
 def _remover_nono_digito(numero: str) -> str:
     """
-    Remove o 9 dígito do número para envio à Vectax.
-    A Vectax cadastra contatos no formato antigo sem o 9.
-    Ex: 5547920020302 (13 dígitos) → 554720020302 (12 dígitos)
+    Remove o 9 dígito somente quando o número tem 9 dígitos no telefone.
+    A Vectax cadastra o contato exatamente como recebe do WhatsApp.
+    - 55 + DDD(2) + 9(1) + 8 dígitos = 13 dígitos → remove o 9 → 12 dígitos
+    - 55 + DDD(2) + 8 dígitos = 12 dígitos → já está correto, não mexe
     """
     import re as _re
-    n = _re.sub(r"\D", "", numero)
-    # Se começa com 55, tem 13 dígitos e o 5º dígito é 9 → remove o 9
+    n = _re.sub(r"[^0-9]", "", numero)
+    # Só remove o 9 se o número tiver 13 dígitos (DDI+DDD+9+8)
+    # Números com 12 dígitos (DDI+DDD+8) já estão no formato correto
     if n.startswith("55") and len(n) == 13 and n[4] == "9":
         n = n[:4] + n[5:]
     return n
