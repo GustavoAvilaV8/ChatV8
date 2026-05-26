@@ -141,6 +141,17 @@ async def receber_webhook(request: Request):
         raise HTTPException(status_code=400, detail="JSON inválido")
 
     evento = corpo.get("event")
+
+    # Captura o número exato quando um novo contato é criado
+    if evento == "NewContact":
+        contato = corpo.get("contact", {})
+        numero_contato = contato.get("number", "")
+        contact_id_novo = str(contato.get("id", ""))
+        if numero_contato and contact_id_novo:
+            db.salvar_numero_contato(contact_id_novo, numero_contato)
+            log.info(f"👤 Novo contato id={contact_id_novo} number={numero_contato}")
+        return JSONResponse({"ok": True})
+
     if evento != "NewMessage":
         return JSONResponse({"ok": True, "ignorado": f"evento {evento}"})
 
@@ -330,10 +341,11 @@ async def enviar_mensagem_vectax(ticket_id: str, numero: str, mensagem: str, con
 
     # Usa o ticket_id como externalKey — assim nas próximas mensagens
     # do mesmo ticket a Vectax encontra e não cria um novo
-    # Usa o número exatamente como a Vectax cadastrou o contato
-    numero_envio = numero_vectax if numero_vectax else _remover_nono_digito(numero)
+    # Busca o número exato do contato salvo quando NewContact chegou
+    numero_salvo = db.buscar_numero_contato(contact_id) if contact_id else ""
+    numero_envio = numero_salvo or (numero_vectax if numero_vectax else _remover_nono_digito(numero))
     external_key = numero_envio
-    log.info(f"📤 numero_envio={numero_envio} (whatsapp={numero} vectax={numero_vectax})")
+    log.info(f"📤 numero_envio={numero_envio} (salvo={numero_salvo} vectax={numero_vectax} whatsapp={numero})")
 
     payload = {
         "body":        mensagem,

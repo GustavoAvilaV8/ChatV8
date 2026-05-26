@@ -158,6 +158,41 @@ class ConversationDB:
             ).fetchone()
         return row["total"] if row else 0
 
+    def salvar_numero_contato(self, contact_id: str, numero: str):
+        """Salva o número exato do contato como cadastrado na Vectax."""
+        with self._conn() as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS contatos_vectax (
+                    contact_id TEXT PRIMARY KEY,
+                    numero     TEXT NOT NULL,
+                    criado_em  TEXT NOT NULL
+                )
+            """)
+            conn.execute("""
+                INSERT INTO contatos_vectax (contact_id, numero, criado_em)
+                VALUES (?, ?, datetime('now'))
+                ON CONFLICT(contact_id) DO UPDATE SET numero = excluded.numero
+            """, (contact_id, numero))
+
+    def buscar_numero_contato(self, contact_id: str) -> str:
+        """Retorna o número exato do contato cadastrado na Vectax."""
+        try:
+            with self._conn() as conn:
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS contatos_vectax (
+                        contact_id TEXT PRIMARY KEY,
+                        numero     TEXT NOT NULL,
+                        criado_em  TEXT NOT NULL
+                    )
+                """)
+                row = conn.execute(
+                    "SELECT numero FROM contatos_vectax WHERE contact_id = ?",
+                    (contact_id,)
+                ).fetchone()
+            return row["numero"] if row else ""
+        except Exception:
+            return ""
+
     def limpar_conversa(self, conversa_id: str):
         """Remove todas as mensagens de uma conversa (uso administrativo)."""
         with self._conn() as conn:
