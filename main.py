@@ -101,7 +101,14 @@ async def receber_webhook(request: Request):
     msg        = corpo.get("message", {})
     ticket_id  = str(msg.get("ticketId", ""))
     contact_id = str(msg.get("contactId", ""))
-    numero_raw = str(msg.get("number") or contact_id)
+    ticket_obj  = msg.get("ticket", {})
+    contact_obj = ticket_obj.get("contact", {})
+    raw_obj     = msg.get("raw", {})
+    numero_raw  = str(
+        contact_obj.get("number")
+        or raw_obj.get("from")
+        or contact_id
+    )
     body       = msg.get("body", "").strip()
     from_me    = msg.get("fromMe", False)
     send_type  = msg.get("sendType", "")
