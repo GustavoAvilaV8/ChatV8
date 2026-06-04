@@ -137,6 +137,20 @@ async def health_check():
     return {"status": "online", "servico": "Cobrança V8 Digital — Claude IA"}
 
 
+@app.get("/webhook")
+async def webhook_verify(request: Request):
+    """Verificacao do webhook pelo Meta WhatsApp Cloud API."""
+    params    = request.query_params
+    mode      = params.get("hub.mode")
+    token     = params.get("hub.verify_token")
+    challenge = params.get("hub.challenge")
+    if mode == "subscribe" and token == "chatv8":
+        log.info("Webhook Meta verificado com sucesso")
+        from fastapi.responses import PlainTextResponse
+        return PlainTextResponse(challenge)
+    return JSONResponse({"error": "forbidden"}, status_code=403)
+
+
 @app.post("/webhook")
 async def receber_webhook(request: Request):
     try:
