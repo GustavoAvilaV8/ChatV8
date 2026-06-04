@@ -343,34 +343,47 @@ async def chamar_claude(historico: list[dict], contexto: str) -> str:
 
 async def enviar_mensagem_vectax(ticket_id: str, numero: str, mensagem: str, contact_id: str = "", numero_vectax: str = ""):
     """
-    Envia mensagem via API externa da Vectax.
-    Usa o número como externalKey para que nas próximas mensagens
-    a Vectax encontre o mesmo ticket e não crie um novo.
+    Tenta enviar via chat-flow-step (por ticketId direto) primeiro.
+    Se falhar, usa a API externa como fallback.
     """
-    url = f"{VECTAX_API_URL}/v1/api/external/{VECTAX_API_ID}"
+    enviado = await _enviar_via_chat_flow_step(ticket_id, mensagem)
+    if not enviado:
+        numero_envio = _remover_nono_digito(numero)
+        await _enviar_via_api_externa(ticket_id, numero_envio, mensagem)
 
-    # Usa o ticket_id como externalKey — assim nas próximas mensagens
-    # do mesmo ticket a Vectax encontra e não cria um novo
-    # Usa o ticketId do cliente como externalKey — a Vectax deve priorizar
-    # o externalKey para encontrar o ticket em vez de criar um novo
-    numero_envio = _remover_nono_digito(numero)  # número sem o 9 para o contato
-    external_key = ticket_id                      # ticketId do cliente como referência
-    log.info(f"📤 numero_envio={numero_envio} externalKey={external_key} original={numero}")
 
-    payload = {
-        "body":        mensagem,
-        "number":      numero_envio,
-        "externalKey": external_key,
-    }
+async def _enviar_via_chat_flow_step(ticket_id: str, mensagem: str) -> bool:
+    """
+    Envia mensagem diretamente no ticket via chat-flow-step.
+    Não precisa de number nem externalKey — usa o ticketId diretamente.
+    Isso evita criação de ticket/contato duplicado.
+    """
+    url = f"{VECTAX_API_URL}/v1/api/external/{VECTAX_API_ID}/{ticket_id}/chat-flow-step"
+    payload = {"body": mensagem}
     headers = {"Authorization": f"Bearer {VECTAX_TOKEN}", "Content-Type": "application/json"}
-
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(url, json=payload, headers=headers)
-        log.info(f"📤 Enviado ticket={ticket_id} numero={numero} externalKey={external_key} status={resp.status_code} body={resp.text[:300]}")
+        log.info(f"📤 chat-flow-step ticket={ticket_id} status={resp.status_code} body={resp.text[:200]}")
+        if resp.status_code == 200:
+            return True
     except Exception as e:
-        log.error(f"Falha envio: {e}")
+        log.error(f"Falha chat-flow-step: {e}")
+    return False
 
+
+async def _enviar_via_api_externa(ticket_id: str, numero: str, mensagem: str):
+    """Fallback: API externa com number e externalKey."""
+    url = f"{VECTAX_API_URL}/v1/api/external/{VECTAX_API_ID}"
+    payload = {"body": mensagem, "number": numero, "externalKey": ticket_id}
+    headers = {"Authorization": f"Bearer {VECTAX_TOKEN}", "Content-Type": "application/json"}
+    log.info(f"📤 API externa ticket={ticket_id} numero={numero}")
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(url, json=payload, headers=headers)
+        log.info(f"📤 Enviado status={resp.status_code} body={resp.text[:200]}")
+    except Exception as e:
+        log.error(f"Falha envio API externa: {e}")
 
 # ---------------------------------------------------------------------------
 # Helpers
