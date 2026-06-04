@@ -189,6 +189,16 @@ async def receber_webhook(request: Request):
 
     log.info(f"✉ ticket={ticket_id} numero={numero_raw} contact_id={contact_id} fromMe={from_me} sendType={send_type} | {body[:80]}")
 
+    # Evita processar a mesma mensagem duas vezes
+    msg_id = raw_obj.get("id", "") or f"{ticket_id}_{body[:20]}"
+    if msg_id in _mensagens_processadas:
+        log.info(f"⚠️ Mensagem duplicada ignorada: {msg_id}")
+        return JSONResponse({"ok": True, "ignorado": "duplicada"})
+    _mensagens_processadas.add(msg_id)
+    # Limpa cache se ficar muito grande
+    if len(_mensagens_processadas) > 1000:
+        _mensagens_processadas.clear()
+
     await processar_mensagem(
         ticket_id=ticket_id,
         contact_id=contact_id,
@@ -432,6 +442,9 @@ async def _buscar_ticket_aberto(numero: str, ticket_id_atual: str) -> str:
 
 # Cache do token em memória
 _token_cache: dict = {"token": "", "expiry": 0.0}
+
+# Cache de mensagens já processadas (evita duplicatas)
+_mensagens_processadas: set = set()
 
 
 async def _obter_token_front() -> str:
