@@ -344,11 +344,14 @@ async def chamar_claude(historico: list[dict], contexto: str) -> str:
 async def enviar_mensagem_vectax(ticket_id: str, numero: str, mensagem: str, contact_id: str = "", numero_vectax: str = ""):
     """
     Tenta enviar via chat-flow-step (por ticketId direto) primeiro.
-    Se falhar, usa a API externa como fallback.
+    Se falhar, usa a API externa com o número exato do contato cadastrado.
     """
     enviado = await _enviar_via_chat_flow_step(ticket_id, mensagem)
     if not enviado:
-        numero_envio = _remover_nono_digito(numero)
+        # Usa o número exato salvo no NewContact — mesmo formato que a Vectax cadastrou
+        numero_salvo = db.buscar_numero_contato(contact_id) if contact_id else ""
+        numero_envio = numero_salvo if numero_salvo else numero
+        log.info(f"📤 numero_envio={numero_envio} (salvo={numero_salvo} original={numero})")
         await _enviar_via_api_externa(ticket_id, numero_envio, mensagem)
 
 
@@ -374,20 +377,17 @@ async def _enviar_via_chat_flow_step(ticket_id: str, mensagem: str) -> bool:
 
 async def _enviar_via_api_externa(ticket_id: str, numero: str, mensagem: str):
     """
-    Fallback: API externa com number e externalKey.
-    Usa o número sem o 9 tanto no number quanto no externalKey
-    para que a Vectax vincule ao mesmo ticket independente do formato.
+    Fallback: API externa.
+    Envia com o número exato do contato (como foi cadastrado pela Vectax via NewContact).
     """
     url = f"{VECTAX_API_URL}/v1/api/external/{VECTAX_API_ID}"
-    # Número sem o 9 como externalKey — consistente entre cliente e bot
-    numero_sem9 = _remover_nono_digito(numero)
     payload = {
         "body":        mensagem,
-        "number":      numero_sem9,
-        "externalKey": numero_sem9,
+        "number":      numero,
+        "externalKey": numero,
     }
     headers = {"Authorization": f"Bearer {VECTAX_TOKEN}", "Content-Type": "application/json"}
-    log.info(f"📤 API externa ticket={ticket_id} number={numero_sem9} externalKey={numero_sem9}")
+    log.info(f"📤 API externa ticket={ticket_id} number={numero} externalKey={numero}")
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(url, json=payload, headers=headers)
