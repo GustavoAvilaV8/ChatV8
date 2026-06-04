@@ -373,11 +373,21 @@ async def _enviar_via_chat_flow_step(ticket_id: str, mensagem: str) -> bool:
 
 
 async def _enviar_via_api_externa(ticket_id: str, numero: str, mensagem: str):
-    """Fallback: API externa com number e externalKey."""
+    """
+    Fallback: API externa com number e externalKey.
+    Usa o número sem o 9 tanto no number quanto no externalKey
+    para que a Vectax vincule ao mesmo ticket independente do formato.
+    """
     url = f"{VECTAX_API_URL}/v1/api/external/{VECTAX_API_ID}"
-    payload = {"body": mensagem, "number": numero, "externalKey": ticket_id}
+    # Número sem o 9 como externalKey — consistente entre cliente e bot
+    numero_sem9 = _remover_nono_digito(numero)
+    payload = {
+        "body":        mensagem,
+        "number":      numero_sem9,
+        "externalKey": numero_sem9,
+    }
     headers = {"Authorization": f"Bearer {VECTAX_TOKEN}", "Content-Type": "application/json"}
-    log.info(f"📤 API externa ticket={ticket_id} numero={numero}")
+    log.info(f"📤 API externa ticket={ticket_id} number={numero_sem9} externalKey={numero_sem9}")
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(url, json=payload, headers=headers)
