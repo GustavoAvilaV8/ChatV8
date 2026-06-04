@@ -158,6 +158,10 @@ async def receber_webhook(request: Request):
     except Exception:
         raise HTTPException(status_code=400, detail="JSON inválido")
 
+    # Detecta se é webhook do Meta (formato diferente da Vectax)
+    if corpo.get("object") == "whatsapp_business_account":
+        return await _processar_webhook_meta(corpo)
+
     evento = corpo.get("event")
 
     # Captura o número exato quando um novo contato é criado
@@ -462,6 +466,55 @@ async def _enviar_via_api_externa(ticket_id: str, numero: str, mensagem: str):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+async def _processar_webhook_meta(corpo: dict):
+    """
+    Processa webhook no formato da Meta WhatsApp Cloud API.
+    Formato completamente diferente da Vectax.
+    """
+    try:
+        entries = corpo.get("entry", [])
+        for entry in entries:
+            changes = entry.get("changes", [])
+            for change in changes:
+                value = change.get("value", {})
+                messages = value.get("messages", [])
+                for msg in messages:
+                    msg_type = msg.get("type")
+                    if msg_type != "text":
+                        continue
+
+                    wamid  = msg.get("id", "")
+                    numero = msg.get("from", "")
+                    body   = msg.get("text", {}).get("body", "").strip()
+
+                    if not body or not numero:
+                        continue
+
+                    # Evita duplicatas
+                    if wamid in _mensagens_processadas:
+                        log.info(f"⚠️ Meta msg duplicada ignorada: {wamid}")
+                        continue
+                    _mensagens_processadas.add(wamid)
+                    if len(_mensagens_processadas) > 1000:
+                        _mensagens_processadas.clear()
+
+                    # Normaliza número
+                    numero = _normalizar_numero_br(numero)
+                    log.info(f"📱 Meta webhook: numero={numero} msg={body[:80]}")
+
+                    # Processa como ticket_id=numero (sem Vectax)
+                    await processar_mensagem(
+                        ticket_id=numero,
+                        contact_id=numero,
+                        numero_whatsapp=numero,
+                        mensagem=body,
+                    )
+    except Exception as e:
+        log.error(f"Erro processando webhook Meta: {e}")
+
+    return JSONResponse({"ok": True})
+
 
 async def _setar_external_key_ticket(ticket_id: str, numero: str):
     """
