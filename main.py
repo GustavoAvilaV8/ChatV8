@@ -432,30 +432,57 @@ async def _buscar_ticket_aberto(numero: str, ticket_id_atual: str) -> str:
     return ticket_id_atual
 
 
+# Cache do token em memória
+_token_cache: dict = {"token": "", "expiry": 0.0}
+
+
 async def _obter_token_front() -> str:
     """
-    Obtém ou renova o token do front da Vectax.
-    Usa o token configurado na variável de ambiente ou faz login.
+    Obtém ou renova o token do front da Vectax automaticamente.
+    Faz login com email/senha e armazena em cache por 2 dias.
     """
-    # Se tiver token configurado, usa ele
+    import time
+
+    # Verifica cache
+    if _token_cache["token"] and time.time() < _token_cache["expiry"]:
+        return _token_cache["token"]
+
+    # Token fixo (prioridade)
     if VECTAX_FRONT_TOKEN:
+        _token_cache["token"] = VECTAX_FRONT_TOKEN
+        _token_cache["expiry"] = time.time() + 172800
         return VECTAX_FRONT_TOKEN
 
-    # Senão, faz login para obter token
-    if not VECTAX_LOGIN_EMAIL or not VECTAX_LOGIN_PASS:
+    # Login automático
+    email    = os.getenv("VECTAX_LOGIN_EMAIL", "")
+    password = os.getenv("VECTAX_LOGIN_PASSWORD", "")
+
+    if not email or not password:
+        log.warning("VECTAX_LOGIN_EMAIL ou VECTAX_LOGIN_PASSWORD nao configurados")
         return ""
 
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.post(
-                f"{VECTAX_FRONT_URL}/auth/login",
-                json={"email": VECTAX_LOGIN_EMAIL, "password": VECTAX_LOGIN_PASS},
+                "https://turbochatapi.v8sistema.com/auth/login/",
+                json={"email": email, "password": password},
                 headers={"Content-Type": "application/json"},
             )
+        log.info(f"Login Vectax status={resp.status_code}")
         if resp.status_code == 200:
-            return resp.json().get("token", "")
+            data = resp.json()
+            token = (data.get("token") or data.get("access")
+                     or data.get("access_token") or data.get("key", ""))
+            if token:
+                _token_cache["token"] = token
+                _token_cache["expiry"] = time.time() + 172800
+                log.info("Token Vectax renovado com sucesso")
+                return token
+            log.error(f"Token nao encontrado: {list(data.keys())}")
+        else:
+            log.error(f"Login falhou: {resp.status_code} {resp.text[:200]}")
     except Exception as e:
-        log.error(f"Falha no login Vectax front: {e}")
+        log.error(f"Falha no login Vectax: {e}")
 
     return ""
 
