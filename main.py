@@ -559,17 +559,12 @@ def _normalizar_numero_br(numero: str) -> str:
 
 def _remover_nono_digito(numero: str) -> str:
     """
-    Remove o 9 dígito adicional de celular brasileiro quando necessário.
-    O 9 adicional é reconhecido quando:
-    - Número tem 13 dígitos (55 + DDD + 9 + 8 dígitos)
-    - O 5º dígito é 9 E o 6º dígito é >= 6 (padrão de celular: 96xxx, 97xxx, 98xxx, 99xxx)
-    - Números como 920..., 91..., 92... que NÃO são o 9 adicional são preservados
+    Remove o 9 dígito de todos os números brasileiros de 13 dígitos.
+    A Vectax normaliza internamente para 12 dígitos (sem o 9) no canal WABA.
     """
     import re as _re
     n = _re.sub(r"[^0-9]", "", numero)
-    # Remove o 9 somente se for o dígito adicional de celular
-    # Celulares com 9 adicional: 9[6-9]xxx (ex: 96, 97, 98, 99)
-    # Números que começam com 9[0-5] são números reais (ex: 920, 91)
-    if n.startswith("55") and len(n) == 13 and n[4] == "9" and n[5] >= "6":
+    # Remove o 9 de qualquer número de 13 dígitos (55 + DDD + 9 + 8)
+    if n.startswith("55") and len(n) == 13 and n[4] == "9":
         n = n[:4] + n[5:]
     return n
