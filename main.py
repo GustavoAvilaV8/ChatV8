@@ -383,11 +383,9 @@ async def _buscar_ticket_aberto(numero: str, ticket_id_atual: str) -> str:
     Busca tickets abertos pelo número do cliente via API do front.
     Retorna o ticketId mais recente encontrado.
     """
-    if not VECTAX_FRONT_TOKEN:
-        return ticket_id_atual
-
     token = await _obter_token_front()
     if not token:
+        log.warning("Sem token Vectax front — usando ticket_id atual")
         return ticket_id_atual
 
     from datetime import datetime, timedelta
