@@ -357,7 +357,7 @@ async def enviar_mensagem_vectax(ticket_id: str, numero: str, mensagem: str, con
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(url, json=payload, headers=headers)
-        log.info(f"📤 Enviado ticket={ticket_id} numero={numero} externalKey={external_key} status={resp.status_code}")
+        log.info(f"📤 Enviado ticket={ticket_id} numero={numero} externalKey={external_key} status={resp.status_code} body={resp.text[:300]}")
     except Exception as e:
         log.error(f"Falha envio: {e}")
 
