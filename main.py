@@ -57,6 +57,10 @@ VECTAX_FRONT_URL   = "https://enterprise-369api.v8sistema.com"
 VECTAX_LOGIN_EMAIL = os.getenv("VECTAX_LOGIN_EMAIL", "")
 VECTAX_LOGIN_PASS  = os.getenv("VECTAX_LOGIN_PASS", "")
 
+# Meta WhatsApp Cloud API — envio direto sem passar pela Vectax
+META_PHONE_NUMBER_ID = os.getenv("META_PHONE_NUMBER_ID", "")
+META_ACCESS_TOKEN    = os.getenv("META_ACCESS_TOKEN", "")
+
 db = ConversationDB("conversas.db")
 
 # ---------------------------------------------------------------------------
@@ -343,16 +347,62 @@ async def chamar_claude(historico: list[dict], contexto: str) -> str:
 
 async def enviar_mensagem_vectax(ticket_id: str, numero: str, mensagem: str, contact_id: str = "", numero_vectax: str = ""):
     """
-    Tenta enviar via chat-flow-step (por ticketId direto) primeiro.
-    Se falhar, usa a API externa com o número exato do contato cadastrado.
+    Tenta enviar pela Meta Cloud API primeiro (sem Vectax — sem ticket duplicado).
+    Se não configurado, tenta chat-flow-step.
+    Se falhar, usa a API externa da Vectax como fallback.
     """
+    # 1. Tenta Meta Cloud API — envio direto, sem criar ticket/contato duplicado
+    if META_PHONE_NUMBER_ID and META_ACCESS_TOKEN:
+        enviado = await _enviar_via_meta(numero, mensagem)
+        if enviado:
+            return
+
+    # 2. Tenta chat-flow-step (só funciona com ChatFlow ativo)
     enviado = await _enviar_via_chat_flow_step(ticket_id, mensagem)
     if not enviado:
-        # Usa o número exato salvo no NewContact — mesmo formato que a Vectax cadastrou
+        # 3. Fallback: API externa da Vectax
         numero_salvo = db.buscar_numero_contato(contact_id) if contact_id else ""
         numero_envio = numero_salvo if numero_salvo else numero
-        log.info(f"📤 numero_envio={numero_envio} (salvo={numero_salvo} original={numero})")
+        log.info(f"📤 Fallback Vectax numero_envio={numero_envio}")
         await _enviar_via_api_externa(ticket_id, numero_envio, mensagem)
+
+
+async def _enviar_via_meta(numero: str, mensagem: str) -> bool:
+    """
+    Envia mensagem diretamente pela API do Meta (WhatsApp Cloud API).
+    Não passa pela Vectax — elimina o problema do ticket/contato duplicado.
+    """
+    if not META_PHONE_NUMBER_ID or not META_ACCESS_TOKEN:
+        return False
+
+    # Usa o número normalizado (sem o 9 se tiver 13 dígitos)
+    numero_meta = _remover_nono_digito(numero)
+    # Remove o 55 do início se necessário — Meta usa formato internacional
+    if numero_meta.startswith("55"):
+        numero_meta = numero_meta  # mantém com 55
+
+    url = f"https://graph.facebook.com/v19.0/{META_PHONE_NUMBER_ID}/messages"
+    payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": numero_meta,
+        "type": "text",
+        "text": {"body": mensagem}
+    }
+    headers = {
+        "Authorization": f"Bearer {META_ACCESS_TOKEN}",
+        "Content-Type": "application/json"
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(url, json=payload, headers=headers)
+        log.info(f"📤 Meta API numero={numero_meta} status={resp.status_code} body={resp.text[:200]}")
+        if resp.status_code == 200:
+            return True
+    except Exception as e:
+        log.error(f"Falha Meta API: {e}")
+    return False
 
 
 async def _enviar_via_chat_flow_step(ticket_id: str, mensagem: str) -> bool:
