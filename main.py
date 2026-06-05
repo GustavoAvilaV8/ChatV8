@@ -324,10 +324,12 @@ async def _tentar_gerar_boleto(
     ticket_id: str, numero_whatsapp: str, contact_id: str, numero_vectax: str
 ) -> bool:
     """
-    Detecta se o cliente confirmou a emissão do boleto.
-    Se sim, extrai os dados do contexto, chama o qualidadev8, e envia o boleto pelo WhatsApp.
-    Retorna True se o boleto foi gerado e enviado (para não enviar a resposta normal duplicada).
+    Detecta se o cliente informou uma data para o boleto.
+    Só gera quando a última resposta do bot estava pedindo a data de vencimento.
+    Retorna True se o boleto foi gerado e enviado.
     """
+    msg_lower = mensagem.lower().strip()
+
     # Só gera boleto quando a mensagem do cliente contiver uma data de vencimento
     # Ex: "dia 20", "20/07", "20/07/2026", "para o dia 15"
     m_data = re.search(r'\b(\d{1,2})[/\-](\d{1,2})(?:[/\-](\d{2,4}))?\b|\bdia\s+(\d{1,2})\b|\bpara\s+(\d{1,2})\b', msg_lower)
@@ -351,8 +353,6 @@ async def _tentar_gerar_boleto(
         return False
 
     # Extrai dados do contexto
-    # re já importado globalmente
-    from datetime import date, timedelta
 
     nome      = ""
     cpf       = ""
