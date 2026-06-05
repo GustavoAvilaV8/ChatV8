@@ -667,7 +667,8 @@ def _formatar_contexto_contrato(detalhe: dict) -> str:
 
 
 async def chamar_claude(historico: list[dict], contexto: str) -> str:
-    system = SYSTEM_PROMPT + "\n\n" + contexto
+    hoje = date.today().strftime('%d/%m/%Y')
+    system = SYSTEM_PROMPT + f"\n\nDATA DE HOJE: {hoje}\n\n" + contexto
     mensagens = [
         {"role": msg["papel"], "content": msg["conteudo"]}
         for msg in historico
