@@ -110,7 +110,8 @@ FLUXO DE ATENDIMENTO:
 4. Pergunte se a empresa realizou o desconto no holerite e quantas vezes
 5. Com base na resposta, aplique o cenário correto
 6. Informe claramente o que o cliente deve pagar
-7. Ofereça emissão de boleto e confirme a data de vencimento desejada
+7. Ofereça emissão de boleto — SEMPRE pergunte a data de vencimento desejada antes de qualquer outra coisa. Nunca emita boleto sem confirmar a data com o cliente.
+8. Somente após o cliente informar a data de vencimento, confirme os dados (valor + data) e informe que o boleto será gerado.
 8. Se o cliente tiver mais de 1 parcela vencida, é possível emitir boleto de uma parcela por vez — deixe claro que as demais continuam inadimplentes até serem regularizadas
 9. Encaminhe para atendente humano para finalizar a emissão do boleto
 
@@ -328,29 +329,26 @@ async def _tentar_gerar_boleto(
     Se sim, extrai os dados do contexto, chama o qualidadev8, e envia o boleto pelo WhatsApp.
     Retorna True se o boleto foi gerado e enviado (para não enviar a resposta normal duplicada).
     """
-    # Palavras que indicam confirmação de boleto
-    confirmacoes = [
-        "sim", "pode", "pode ser", "pode gerar", "quero", "quero o boleto",
-        "manda", "manda o boleto", "gera", "gera o boleto", "ok", "tá bom",
-        "ta bom", "tá", "pode mandar", "vamos", "pode emitir", "emite",
-        "confirmo", "isso", "isso mesmo", "exato", "pode", "claro",
-    ]
-    msg_lower = mensagem.lower().strip()
-
-    # Só age se a mensagem for uma confirmação curta (evita falsos positivos)
-    eh_confirmacao = any(msg_lower == c or msg_lower.startswith(c) for c in confirmacoes)
-    if not eh_confirmacao:
+    # Só gera boleto quando a mensagem do cliente contiver uma data de vencimento
+    # Ex: "dia 20", "20/07", "20/07/2026", "para o dia 15"
+    m_data = _re.search(r'\b(\d{1,2})[/\-](\d{1,2})(?:[/\-](\d{2,4}))?\b|\bdia\s+(\d{1,2})\b|\bpara\s+(\d{1,2})\b', msg_lower)
+    if not m_data:
         return False
 
-    # Só gera boleto se o Claude estava falando de boleto na resposta ANTERIOR
-    # Verifica o histórico — a última mensagem do assistant antes dessa deve mencionar boleto
+    # Só age se a última mensagem do bot estava falando de boleto E pedindo a data
     historico = db.buscar_historico(conversa_id=ticket_id, limite=6)
     msgs_assistant = [h for h in historico if h["papel"] == "assistant"]
     if not msgs_assistant:
         return False
 
     ultima_resposta = msgs_assistant[-1]["conteudo"].lower()
-    if not any(p in ultima_resposta for p in ["boleto", "vencimento", "data prefere", "providenciar"]):
+    pediu_data = any(p in ultima_resposta for p in [
+        "data", "vencimento", "qual data", "prefere", "dia prefere",
+        "data prefere", "quando", "data deseja", "para qual data",
+    ])
+    fala_boleto = any(p in ultima_resposta for p in ["boleto", "providenciar", "emitir", "gerar"])
+
+    if not pediu_data or not fala_boleto:
         return False
 
     # Extrai dados do contexto
@@ -389,27 +387,28 @@ async def _tentar_gerar_boleto(
         provider = m.group(1).upper()
     log.info(f"💳 Provider detectado: '{provider}'")
 
-    # Extrai data de vencimento da conversa (se o cliente mencionou)
+    # Extrai a data da mensagem do cliente
     vencimento_str = ""
-    m = _re.search(r'(\d{1,2})[/\-](\d{1,2})(?:[/\-](\d{2,4}))?', mensagem)
-    if m:
-        dia = int(m.group(1))
-        mes = int(m.group(2))
-        ano = int(m.group(3)) if m.group(3) else date.today().year
-        if ano < 100:
-            ano += 2000
+
+    # Tenta "dia 20" ou "para 20"
+    m_dia = _re.search(r'\b(?:dia|para)\s+(\d{1,2})\b', msg_lower)
+    if m_dia:
+        dia = int(m_dia.group(1))
+        hoje = date.today()
+        mes = hoje.month if dia > hoje.day else (hoje.month % 12) + 1
+        ano = hoje.year if mes >= hoje.month else hoje.year + 1
         try:
             vencimento_str = date(ano, mes, dia).strftime('%Y-%m-%d')
         except Exception:
             pass
 
-    # Também verifica na última mensagem do assistant
+    # Tenta "20/07" ou "20/07/2026"
     if not vencimento_str:
-        m = _re.search(r'(\d{1,2})[/\-](\d{1,2})(?:[/\-](\d{2,4}))?', ultima_resposta)
-        if m:
-            dia = int(m.group(1))
-            mes = int(m.group(2))
-            ano = int(m.group(3)) if m.group(3) else date.today().year
+        m_dt = _re.search(r'\b(\d{1,2})[/\-](\d{1,2})(?:[/\-](\d{2,4}))?\b', mensagem)
+        if m_dt:
+            dia = int(m_dt.group(1))
+            mes = int(m_dt.group(2))
+            ano = int(m_dt.group(3)) if m_dt.group(3) else date.today().year
             if ano < 100:
                 ano += 2000
             try:
@@ -417,10 +416,10 @@ async def _tentar_gerar_boleto(
             except Exception:
                 pass
 
-    # Default: 5 dias úteis
+    # Se não conseguiu extrair a data, não gera
     if not vencimento_str:
-        venc = date.today() + timedelta(days=5)
-        vencimento_str = venc.strftime('%Y-%m-%d')
+        log.info("Boleto: data informada pelo cliente não reconhecida")
+        return False
 
     log.info(f"💳 Gerando boleto: provider={provider} contrato={contrato} valor={valor} venc={vencimento_str}")
 
