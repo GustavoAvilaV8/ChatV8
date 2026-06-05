@@ -294,12 +294,11 @@ async def processar_mensagem(ticket_id: str, contact_id: str, numero_whatsapp: s
     cpf_cliente = ""
     contrato_cliente = ""
     if contexto:
-        import re as _re
-        m = _re.search(r'Nome:\s*(.+)', contexto)
+        m = re.search(r'Nome:\s*(.+)', contexto)
         if m: nome_cliente = m.group(1).strip()
-        m = _re.search(r'CPF:\s*(\d+)', contexto)
+        m = re.search(r'CPF:\s*(\d+)', contexto)
         if m: cpf_cliente = m.group(1).strip()
-        m = _re.search(r'Contrato:\s*(\S+)', contexto)
+        m = re.search(r'Contrato:\s*(\S+)', contexto)
         if m: contrato_cliente = m.group(1).strip()
 
     await _salvar_no_crm(numero_whatsapp, "user", mensagem, nome_cliente, cpf_cliente, contrato_cliente)
@@ -331,7 +330,7 @@ async def _tentar_gerar_boleto(
     """
     # Só gera boleto quando a mensagem do cliente contiver uma data de vencimento
     # Ex: "dia 20", "20/07", "20/07/2026", "para o dia 15"
-    m_data = _re.search(r'\b(\d{1,2})[/\-](\d{1,2})(?:[/\-](\d{2,4}))?\b|\bdia\s+(\d{1,2})\b|\bpara\s+(\d{1,2})\b', msg_lower)
+    m_data = re.search(r'\b(\d{1,2})[/\-](\d{1,2})(?:[/\-](\d{2,4}))?\b|\bdia\s+(\d{1,2})\b|\bpara\s+(\d{1,2})\b', msg_lower)
     if not m_data:
         return False
 
@@ -352,7 +351,7 @@ async def _tentar_gerar_boleto(
         return False
 
     # Extrai dados do contexto
-    import re as _re
+    # re já importado globalmente
     from datetime import date, timedelta
 
     nome      = ""
@@ -362,18 +361,18 @@ async def _tentar_gerar_boleto(
     parcelas  = []
 
     if contexto:
-        m = _re.search(r'Nome:\s*(.+)', contexto)
+        m = re.search(r'Nome:\s*(.+)', contexto)
         if m: nome = m.group(1).strip()
-        m = _re.search(r'CPF:\s*(\d+)', contexto)
+        m = re.search(r'CPF:\s*(\d+)', contexto)
         if m: cpf = m.group(1).strip()
-        m = _re.search(r'Contrato:\s*(\S+)', contexto)
+        m = re.search(r'Contrato:\s*(\S+)', contexto)
         if m: contrato = m.group(1).strip()
         # Pega o total em aberto como valor do boleto
-        m = _re.search(r'Total em aberto:\s*R\$\s*([\d.,]+)', contexto)
+        m = re.search(r'Total em aberto:\s*R\$\s*([\d.,]+)', contexto)
         if m:
             valor = float(m.group(1).replace('.', '').replace(',', '.'))
         # Tenta pegar parcelas pendentes
-        nums = _re.findall(r'Parcela\s+(\d+)', contexto)
+        nums = re.findall(r'Parcela\s+(\d+)', contexto)
         parcelas = [int(n) for n in nums[:6]]
 
     if not contrato or valor <= 0:
@@ -382,7 +381,7 @@ async def _tentar_gerar_boleto(
 
     # Detecta provider pelo contexto (linha: "Contrato: XPTO (CELCOIN)" ou "(QI)")
     provider = ""
-    m = _re.search(r'Contrato:\s*\S+\s*\((\w+)\)', contexto)
+    m = re.search(r'Contrato:\s*\S+\s*\((\w+)\)', contexto)
     if m:
         provider = m.group(1).upper()
     log.info(f"💳 Provider detectado: '{provider}'")
@@ -391,7 +390,7 @@ async def _tentar_gerar_boleto(
     vencimento_str = ""
 
     # Tenta "dia 20" ou "para 20"
-    m_dia = _re.search(r'\b(?:dia|para)\s+(\d{1,2})\b', msg_lower)
+    m_dia = re.search(r'\b(?:dia|para)\s+(\d{1,2})\b', msg_lower)
     if m_dia:
         dia = int(m_dia.group(1))
         hoje = date.today()
@@ -404,7 +403,7 @@ async def _tentar_gerar_boleto(
 
     # Tenta "20/07" ou "20/07/2026"
     if not vencimento_str:
-        m_dt = _re.search(r'\b(\d{1,2})[/\-](\d{1,2})(?:[/\-](\d{2,4}))?\b', mensagem)
+        m_dt = re.search(r'\b(\d{1,2})[/\-](\d{1,2})(?:[/\-](\d{2,4}))?\b', mensagem)
         if m_dt:
             dia = int(m_dt.group(1))
             mes = int(m_dt.group(2))
@@ -969,8 +968,8 @@ def _normalizar_numero_br(numero: str) -> str:
     Formato esperado: 55 + DDD (2) + 9 + número (8) = 13 dígitos
     Sem o 9:          55 + DDD (2) + número (8)     = 12 dígitos
     """
-    import re as _re
-    n = _re.sub(r"\D", "", numero)
+    # re já importado globalmente
+    n = re.sub(r"\D", "", numero)
     if n.startswith("55") and len(n) == 12:
         n = n[:4] + "9" + n[4:]
     return n
@@ -981,8 +980,8 @@ def _remover_nono_digito(numero: str) -> str:
     Remove o 9 dígito de todos os números brasileiros de 13 dígitos.
     A Vectax normaliza internamente para 12 dígitos (sem o 9) no canal WABA.
     """
-    import re as _re
-    n = _re.sub(r"[^0-9]", "", numero)
+    # re já importado globalmente
+    n = re.sub(r"[^0-9]", "", numero)
     # Remove o 9 de qualquer número de 13 dígitos (55 + DDD + 9 + 8)
     if n.startswith("55") and len(n) == 13 and n[4] == "9":
         n = n[:4] + n[5:]
