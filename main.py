@@ -336,6 +336,11 @@ async def _tentar_gerar_boleto(
     msg_lower = mensagem.lower().strip()
     log.info(f"🔍 _tentar_gerar_boleto: msg='{mensagem[:60]}'")
 
+    # Confirmações que dispensam data na mensagem atual (se já tiver no histórico)
+    CONFIRMACOES = {'sim', 'pode', 'ok', 'tá', 'ta', 'certo', 'isso', 'confirmo', 'pode ser',
+                    'pode gerar', 'gera', 'manda', 'no aguardo', 'aguardo', 'pode emitir'}
+    eh_confirmacao = msg_lower in CONFIRMACOES or any(msg_lower.startswith(c) for c in CONFIRMACOES)
+
     # Detecta dias da semana e converte para data
     DIAS_SEMANA = {
         'segunda': 0, 'segunda-feira': 0, 'segunda feira': 0,
@@ -362,10 +367,10 @@ async def _tentar_gerar_boleto(
             break
 
     m_data = re.search(r'\b(\d{1,2})[/\-](\d{1,2})(?:[/\-](\d{2,4}))?\b|\bdia\s+(\d{1,2})\b|\bpara\s+(\d{1,2})\b', msg_lower)
-    log.info(f"🔍 m_data={bool(m_data)} data_por_dia_semana={data_por_dia_semana}")
+    log.info(f"🔍 m_data={bool(m_data)} data_por_dia_semana={data_por_dia_semana} eh_confirmacao={eh_confirmacao}")
 
-    if not m_data and not data_por_dia_semana:
-        log.info("🔍 Sem data na mensagem — não gera boleto")
+    if not m_data and not data_por_dia_semana and not eh_confirmacao:
+        log.info("🔍 Sem data nem confirmação — não gera boleto")
         return False
 
     historico = db.buscar_historico(conversa_id=ticket_id, limite=6)
@@ -470,7 +475,7 @@ async def _tentar_gerar_boleto(
             except Exception:
                 pass
 
-    # Prioridade 3: "08/05" ou "08/05/2026" — formato brasileiro dia/mes
+    # Prioridade 3: "08/06" ou "08/06/2026"
     if not vencimento_str:
         m_dt = re.search(r'\b(\d{1,2})[/\-](\d{1,2})(?:[/\-](\d{2,4}))?\b', mensagem)
         if m_dt:
@@ -479,7 +484,6 @@ async def _tentar_gerar_boleto(
             ano = int(m_dt.group(3)) if m_dt.group(3) else date.today().year
             if ano < 100:
                 ano += 2000
-            # Se a data já passou, avança para o próximo ano
             try:
                 d = date(ano, mes, dia)
                 if d < date.today():
@@ -488,9 +492,42 @@ async def _tentar_gerar_boleto(
             except Exception:
                 pass
 
-    # Se não conseguiu extrair a data, não gera
+    # Prioridade 4: busca a data no histórico recente (cliente pode ter informado antes)
     if not vencimento_str:
-        log.info("Boleto: data informada pelo cliente não reconhecida")
+        historico_msgs = db.buscar_historico(conversa_id=ticket_id, limite=10)
+        msgs_user = [h for h in historico_msgs if h["papel"] == "user"]
+        for msg_hist in reversed(msgs_user[-5:]):
+            conteudo = msg_hist.get("conteudo", "")
+            # Testa dia da semana
+            for nome_dia, weekday in DIAS_SEMANA.items():
+                if nome_dia in conteudo.lower():
+                    data_por_dia_semana = _proximo_dia_semana(weekday)
+                    vencimento_str = data_por_dia_semana.strftime('%Y-%m-%d')
+                    log.info(f"🔍 Data encontrada no histórico (dia semana): {vencimento_str}")
+                    break
+            if vencimento_str:
+                break
+            # Testa data numérica
+            m_dt = re.search(r'\b(\d{1,2})[/\-](\d{1,2})(?:[/\-](\d{2,4}))?\b', conteudo)
+            if m_dt:
+                dia = int(m_dt.group(1))
+                mes = int(m_dt.group(2))
+                ano = int(m_dt.group(3)) if m_dt.group(3) else date.today().year
+                if ano < 100:
+                    ano += 2000
+                try:
+                    d = date(ano, mes, dia)
+                    if d < date.today():
+                        d = date(ano + 1, mes, dia)
+                    vencimento_str = d.strftime('%Y-%m-%d')
+                    log.info(f"🔍 Data encontrada no histórico: {vencimento_str}")
+                    break
+                except Exception:
+                    pass
+
+    # Se não conseguiu extrair a data de nenhum lugar, não gera
+    if not vencimento_str:
+        log.info("🔍 Data não encontrada em lugar nenhum — não gera boleto")
         return False
 
     log.info(f"💳 Gerando boleto: provider={provider} contrato={contrato} valor={valor} venc={vencimento_str} parcelas={parcelas}")
