@@ -281,6 +281,23 @@ async def processar_mensagem(ticket_id: str, contact_id: str, numero_whatsapp: s
 
     # 5. Salva e envia
     db.salvar_mensagem(conversa_id=ticket_id_real, papel="assistant", conteudo=resposta, numero=contact_id)
+
+    # Salva no CRM do qualidadev8
+    nome_cliente = ""
+    cpf_cliente = ""
+    contrato_cliente = ""
+    if contexto:
+        import re as _re
+        m = _re.search(r'Nome:\s*(.+)', contexto)
+        if m: nome_cliente = m.group(1).strip()
+        m = _re.search(r'CPF:\s*(\d+)', contexto)
+        if m: cpf_cliente = m.group(1).strip()
+        m = _re.search(r'Contrato:\s*(\S+)', contexto)
+        if m: contrato_cliente = m.group(1).strip()
+
+    await _salvar_no_crm(numero_whatsapp, "user", mensagem, nome_cliente, cpf_cliente, contrato_cliente)
+    await _salvar_no_crm(numero_whatsapp, "assistant", resposta, nome_cliente, cpf_cliente, contrato_cliente)
+
     await enviar_mensagem_vectax(ticket_id_real, numero_whatsapp, resposta, contact_id, numero_vectax or numero_whatsapp)
 
 
@@ -485,6 +502,25 @@ async def _enviar_via_api_externa(ticket_id: str, numero: str, mensagem: str):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+async def _salvar_no_crm(numero: str, papel: str, conteudo: str, nome: str = "", cpf: str = "", contrato: str = ""):
+    """Salva a mensagem no CRM do qualidadev8."""
+    url = f"{QUALIDADE_API_URL}/chatbot/api/conversa"
+    payload = {
+        "numero": numero,
+        "papel": papel,
+        "conteudo": conteudo,
+        "nome_cliente": nome,
+        "cpf": cpf,
+        "numero_contrato": contrato,
+    }
+    headers = {"X-API-Key": QUALIDADE_API_SECRET, "Content-Type": "application/json"}
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            await client.post(url, json=payload, headers=headers)
+    except Exception as e:
+        log.warning(f"Falha ao salvar no CRM: {e}")
+
 
 async def _processar_webhook_meta(corpo: dict):
     """
