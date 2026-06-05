@@ -15,6 +15,7 @@ import os
 import re
 import json
 import logging
+from datetime import date, timedelta
 from typing import Optional
 
 import httpx
@@ -145,6 +146,11 @@ EXEMPLOS DE ABORDAGEM:
 - Encerramento: "Assim que realizar o pagamento, envie o comprovante para darmos baixa. Qualquer duvida estou a disposicao."
 
 Quando tiver os dados do cliente no contexto, use-os para personalizar o atendimento com os valores e vencimentos corretos de cada parcela.
+
+ATENÇÃO — CLIENTE NÃO ENCONTRADO:
+Se o contexto indicar que o cliente não foi localizado na base, NÃO invente informações.
+Diga honestamente: "Não localizei seu cadastro em nossa base. Poderia verificar se o CPF está correto, ou me informar o número do seu contrato?"
+Nunca diga "localizei", "identifiquei pendência" ou apresente dados quando não tiver informações reais no contexto.
 """
 # ---------------------------------------------------------------------------
 # Webhook
@@ -282,7 +288,7 @@ async def processar_mensagem(ticket_id: str, contact_id: str, numero_whatsapp: s
     # 5. Salva e envia
     db.salvar_mensagem(conversa_id=ticket_id_real, papel="assistant", conteudo=resposta, numero=contact_id)
 
-    # Salva no CRM do qualidadev8
+    # Extrai dados do cliente do contexto
     nome_cliente = ""
     cpf_cliente = ""
     contrato_cliente = ""
@@ -298,7 +304,236 @@ async def processar_mensagem(ticket_id: str, contact_id: str, numero_whatsapp: s
     await _salvar_no_crm(numero_whatsapp, "user", mensagem, nome_cliente, cpf_cliente, contrato_cliente)
     await _salvar_no_crm(numero_whatsapp, "assistant", resposta, nome_cliente, cpf_cliente, contrato_cliente)
 
-    await enviar_mensagem_vectax(ticket_id_real, numero_whatsapp, resposta, contact_id, numero_vectax or numero_whatsapp)
+    # 6. Detecta se o cliente confirmou que quer o boleto e gera automaticamente
+    boleto_gerado = await _tentar_gerar_boleto(
+        mensagem=mensagem,
+        resposta_claude=resposta,
+        contexto=contexto,
+        ticket_id=ticket_id_real,
+        numero_whatsapp=numero_whatsapp,
+        contact_id=contact_id,
+        numero_vectax=numero_vectax,
+    )
+
+    if not boleto_gerado:
+        await enviar_mensagem_vectax(ticket_id_real, numero_whatsapp, resposta, contact_id, numero_vectax or numero_whatsapp)
+
+
+async def _tentar_gerar_boleto(
+    mensagem: str, resposta_claude: str, contexto: str,
+    ticket_id: str, numero_whatsapp: str, contact_id: str, numero_vectax: str
+) -> bool:
+    """
+    Detecta se o cliente confirmou a emissão do boleto.
+    Se sim, extrai os dados do contexto, chama o qualidadev8, e envia o boleto pelo WhatsApp.
+    Retorna True se o boleto foi gerado e enviado (para não enviar a resposta normal duplicada).
+    """
+    # Palavras que indicam confirmação de boleto
+    confirmacoes = [
+        "sim", "pode", "pode ser", "pode gerar", "quero", "quero o boleto",
+        "manda", "manda o boleto", "gera", "gera o boleto", "ok", "tá bom",
+        "ta bom", "tá", "pode mandar", "vamos", "pode emitir", "emite",
+        "confirmo", "isso", "isso mesmo", "exato", "pode", "claro",
+    ]
+    msg_lower = mensagem.lower().strip()
+
+    # Só age se a mensagem for uma confirmação curta (evita falsos positivos)
+    eh_confirmacao = any(msg_lower == c or msg_lower.startswith(c) for c in confirmacoes)
+    if not eh_confirmacao:
+        return False
+
+    # Só gera boleto se o Claude estava falando de boleto na resposta ANTERIOR
+    # Verifica o histórico — a última mensagem do assistant antes dessa deve mencionar boleto
+    historico = db.buscar_historico(conversa_id=ticket_id, limite=6)
+    msgs_assistant = [h for h in historico if h["papel"] == "assistant"]
+    if not msgs_assistant:
+        return False
+
+    ultima_resposta = msgs_assistant[-1]["conteudo"].lower()
+    if not any(p in ultima_resposta for p in ["boleto", "vencimento", "data prefere", "providenciar"]):
+        return False
+
+    # Extrai dados do contexto
+    import re as _re
+    from datetime import date, timedelta
+
+    nome      = ""
+    cpf       = ""
+    contrato  = ""
+    valor     = 0.0
+    parcelas  = []
+
+    if contexto:
+        m = _re.search(r'Nome:\s*(.+)', contexto)
+        if m: nome = m.group(1).strip()
+        m = _re.search(r'CPF:\s*(\d+)', contexto)
+        if m: cpf = m.group(1).strip()
+        m = _re.search(r'Contrato:\s*(\S+)', contexto)
+        if m: contrato = m.group(1).strip()
+        # Pega o total em aberto como valor do boleto
+        m = _re.search(r'Total em aberto:\s*R\$\s*([\d.,]+)', contexto)
+        if m:
+            valor = float(m.group(1).replace('.', '').replace(',', '.'))
+        # Tenta pegar parcelas pendentes
+        nums = _re.findall(r'Parcela\s+(\d+)', contexto)
+        parcelas = [int(n) for n in nums[:6]]
+
+    if not contrato or valor <= 0:
+        log.info("Boleto: dados insuficientes no contexto para gerar automaticamente")
+        return False
+
+    # Detecta provider pelo contexto (linha: "Contrato: XPTO (CELCOIN)" ou "(QI)")
+    provider = ""
+    m = _re.search(r'Contrato:\s*\S+\s*\((\w+)\)', contexto)
+    if m:
+        provider = m.group(1).upper()
+    log.info(f"💳 Provider detectado: '{provider}'")
+
+    # Extrai data de vencimento da conversa (se o cliente mencionou)
+    vencimento_str = ""
+    m = _re.search(r'(\d{1,2})[/\-](\d{1,2})(?:[/\-](\d{2,4}))?', mensagem)
+    if m:
+        dia = int(m.group(1))
+        mes = int(m.group(2))
+        ano = int(m.group(3)) if m.group(3) else date.today().year
+        if ano < 100:
+            ano += 2000
+        try:
+            vencimento_str = date(ano, mes, dia).strftime('%Y-%m-%d')
+        except Exception:
+            pass
+
+    # Também verifica na última mensagem do assistant
+    if not vencimento_str:
+        m = _re.search(r'(\d{1,2})[/\-](\d{1,2})(?:[/\-](\d{2,4}))?', ultima_resposta)
+        if m:
+            dia = int(m.group(1))
+            mes = int(m.group(2))
+            ano = int(m.group(3)) if m.group(3) else date.today().year
+            if ano < 100:
+                ano += 2000
+            try:
+                vencimento_str = date(ano, mes, dia).strftime('%Y-%m-%d')
+            except Exception:
+                pass
+
+    # Default: 5 dias úteis
+    if not vencimento_str:
+        venc = date.today() + timedelta(days=5)
+        vencimento_str = venc.strftime('%Y-%m-%d')
+
+    log.info(f"💳 Gerando boleto: provider={provider} contrato={contrato} valor={valor} venc={vencimento_str}")
+
+    # Chama a rota correta baseado no provider
+    if provider == "QI":
+        resultado = await _gerar_boleto_qi(
+            numero_contrato=contrato,
+            nome=nome,
+            cpf=cpf,
+            valor=valor,
+            vencimento=vencimento_str,
+            parcelas=parcelas,
+        )
+    else:
+        # Celcoin ou qualquer outro → Asaas
+        resultado = await _gerar_boleto_asaas(
+            numero_contrato=contrato,
+            nome=nome,
+            cpf=cpf,
+            valor=valor,
+            vencimento=vencimento_str,
+            parcelas=parcelas,
+        )
+
+    if not resultado or not resultado.get("ok"):
+        erro = resultado.get("erro", "erro desconhecido") if resultado else "sem resposta"
+        log.error(f"Falha ao gerar boleto: {erro}")
+        # Envia resposta normal do Claude + aviso de falha
+        await enviar_mensagem_vectax(ticket_id, numero_whatsapp, resposta_claude, contact_id, numero_vectax or numero_whatsapp)
+        await enviar_mensagem_vectax(
+            ticket_id, numero_whatsapp,
+            "Tive uma dificuldade ao gerar o boleto agora. Um atendente vai te enviar em instantes.",
+            contact_id, numero_vectax or numero_whatsapp
+        )
+        return True  # Retorna True para não enviar a resposta normal novamente
+
+    # Monta mensagem com os dados do boleto
+    linha = resultado.get("linha_digitavel", "")
+    url   = resultado.get("url_boleto", "")
+    pix   = resultado.get("pix_copia_cola", "")
+    valor_fmt = f"R$ {resultado.get('valor', valor):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    venc_fmt  = vencimento_str[8:] + "/" + vencimento_str[5:7] + "/" + vencimento_str[:4]
+
+    partes = [resposta_claude, ""]
+    partes.append(f"Boleto gerado com sucesso!")
+    partes.append(f"Valor: {valor_fmt}")
+    partes.append(f"Vencimento: {venc_fmt}")
+
+    if linha:
+        partes.append(f"\nLinha digitavel:\n{linha}")
+    if url:
+        partes.append(f"\nLink do boleto:\n{url}")
+    if pix:
+        partes.append(f"\nPix copia e cola:\n{pix}")
+    if resultado.get("pending") and not url and not linha:
+        partes.append("\nO link do boleto sera disponibilizado em breve pela QI. Qualquer duvida, estou a disposicao.")
+
+    partes.append("\nApos o pagamento, envie o comprovante para darmos baixa.")
+
+    mensagem_final = "\n".join(partes)
+    await enviar_mensagem_vectax(ticket_id, numero_whatsapp, mensagem_final, contact_id, numero_vectax or numero_whatsapp)
+    log.info(f"✅ Boleto enviado para {numero_whatsapp}")
+    return True
+
+
+async def _gerar_boleto_asaas(
+    numero_contrato: str, nome: str, cpf: str,
+    valor: float, vencimento: str, parcelas: list
+) -> Optional[dict]:
+    """Gera boleto via Asaas (contratos Celcoin) pelo qualidadev8."""
+    url = f"{QUALIDADE_API_URL}/chatbot/api/boleto/asaas"
+    payload = {
+        "numero_contrato": numero_contrato,
+        "nome": nome,
+        "cpf": cpf,
+        "valor": valor,
+        "vencimento": vencimento,
+        "parcelas": parcelas,
+    }
+    headers = {"X-API-Key": QUALIDADE_API_SECRET, "Content-Type": "application/json"}
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(url, json=payload, headers=headers)
+        log.info(f"💳 boleto Asaas status={resp.status_code}")
+        return resp.json()
+    except Exception as e:
+        log.error(f"Erro ao chamar /chatbot/api/boleto/asaas: {e}")
+        return None
+
+
+async def _gerar_boleto_qi(
+    numero_contrato: str, nome: str, cpf: str,
+    valor: float, vencimento: str, parcelas: list
+) -> Optional[dict]:
+    """Gera boleto via API QI (Clickmassa) pelo qualidadev8."""
+    url = f"{QUALIDADE_API_URL}/chatbot/api/boleto/qi"
+    payload = {
+        "numero_contrato": numero_contrato,
+        "nome": nome,
+        "cpf": cpf,
+        "valor": valor,
+        "vencimento": vencimento,
+        "parcelas": parcelas,
+    }
+    headers = {"X-API-Key": QUALIDADE_API_SECRET, "Content-Type": "application/json"}
+    try:
+        async with httpx.AsyncClient(timeout=35) as client:
+            resp = await client.post(url, json=payload, headers=headers)
+        log.info(f"💳 boleto QI status={resp.status_code}")
+        return resp.json()
+    except Exception as e:
+        log.error(f"Erro ao chamar /chatbot/api/boleto/qi: {e}")
+        return None
 
 
 async def _montar_contexto(numero_whatsapp: str, mensagem: str, ticket_id: str) -> str:
