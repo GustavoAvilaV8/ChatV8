@@ -150,6 +150,9 @@ EXEMPLOS DE ABORDAGEM:
 
 Quando tiver os dados do cliente no contexto, use-os para personalizar o atendimento com os valores e vencimentos corretos de cada parcela.
 
+ATENÇÃO — SITUAÇÃO FINANCEIRA:
+Use APENAS os dados de "SITUAÇÃO FINANCEIRA" do contexto. Se "Parcelas vencidas/pendentes" for maior que 0, há pendências. Se for 0, não há pendências. NUNCA deduza a situação por datas — use sempre os números calculados.
+
 ATENÇÃO — CLIENTE NÃO ENCONTRADO:
 Se o contexto indicar que o cliente não foi localizado na base, NÃO invente informações.
 Diga honestamente: "Não localizei seu cadastro em nossa base. Poderia verificar se o CPF está correto, ou me informar o número do seu contrato?"
@@ -642,7 +645,6 @@ def _formatar_contexto_contrato(detalhe: dict) -> str:
         f"Empresa: {c.get('empresa')}",
         f"Contrato: {c.get('numero')} ({c.get('provider')})",
         f"Valor desembolsado: R$ {float(c.get('valor_desembolso') or c.get('valor_contrato') or 0):.2f}",
-        f"Data primeira parcela: {c.get('data_primeiro_venc') or c.get('primeira_parcela') or 'N/A'}",
         f"Valor da parcela: R$ {c.get('valor_parcela', 0):.2f}",
         f"Total de parcelas: {c.get('n_parcelas')}",
         "",
