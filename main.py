@@ -405,7 +405,20 @@ async def _tentar_gerar_boleto(
         parcelas = [int(n) for n in nums[:1]]  # só a primeira (mais antiga)
 
     if not contrato:
-        log.info("Boleto: contrato não encontrado no contexto")
+        # Tenta achar o contrato no histórico da conversa
+        historico_completo = db.buscar_historico(conversa_id=ticket_id, limite=20)
+        for msg in reversed(historico_completo):
+            m = re.search(r'Contrato:\s*(\S+)', msg.get('conteudo', ''))
+            if m:
+                contrato = m.group(1).strip().rstrip('(').strip()
+                m2 = re.search(r'Contrato:\s*\S+\s*\((\w+)\)', msg.get('conteudo', ''))
+                if m2 and not provider:
+                    provider = m2.group(1).upper()
+                log.info(f"Boleto: contrato {contrato} encontrado no histórico")
+                break
+
+    if not contrato:
+        log.info("Boleto: contrato não encontrado no contexto nem no histórico")
         return False
 
     # Se não tem valor no contexto, busca os detalhes do contrato na API
