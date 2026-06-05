@@ -111,7 +111,7 @@ FLUXO DE ATENDIMENTO:
 5. Com base na resposta, aplique o cenário correto
 6. Informe claramente o que o cliente deve pagar
 7. Ofereça emissão de boleto — SEMPRE pergunte a data de vencimento desejada antes de qualquer outra coisa. Nunca emita boleto sem confirmar a data com o cliente.
-8. Somente após o cliente informar a data de vencimento, confirme os dados (valor + data) e informe que o boleto será gerado.
+8. Somente após o cliente informar a data de vencimento, confirme os dados (valor + data) e informe que o boleto será gerado agora.
 8. Se o cliente tiver mais de 1 parcela vencida, é possível emitir boleto de uma parcela por vez — deixe claro que as demais continuam inadimplentes até serem regularizadas
 9. Encaminhe para atendente humano para finalizar a emissão do boleto
 
@@ -330,10 +330,34 @@ async def _tentar_gerar_boleto(
     """
     msg_lower = mensagem.lower().strip()
 
-    # Só gera boleto quando a mensagem do cliente contiver uma data de vencimento
-    # Ex: "dia 20", "20/07", "20/07/2026", "para o dia 15"
+    # Detecta dias da semana e converte para data
+    DIAS_SEMANA = {
+        'segunda': 0, 'segunda-feira': 0, 'segunda feira': 0,
+        'terca': 1, 'terça': 1, 'terca-feira': 1, 'terça-feira': 1, 'terca feira': 1, 'terça feira': 1,
+        'quarta': 2, 'quarta-feira': 2, 'quarta feira': 2,
+        'quinta': 3, 'quinta-feira': 3, 'quinta feira': 3,
+        'sexta': 4, 'sexta-feira': 4, 'sexta feira': 4,
+        'sabado': 5, 'sábado': 5,
+        'domingo': 6,
+    }
+
+    def _proximo_dia_semana(alvo_weekday: int) -> date:
+        """Retorna a próxima ocorrência do dia da semana (nunca hoje)."""
+        hoje = date.today()
+        dias = (alvo_weekday - hoje.weekday() + 7) % 7
+        if dias == 0:
+            dias = 7
+        return hoje + timedelta(days=dias)
+
+    data_por_dia_semana = None
+    for nome_dia, weekday in DIAS_SEMANA.items():
+        if nome_dia in msg_lower:
+            data_por_dia_semana = _proximo_dia_semana(weekday)
+            break
+
+    # Só gera boleto quando a mensagem contiver uma data ou dia da semana
     m_data = re.search(r'\b(\d{1,2})[/\-](\d{1,2})(?:[/\-](\d{2,4}))?\b|\bdia\s+(\d{1,2})\b|\bpara\s+(\d{1,2})\b', msg_lower)
-    if not m_data:
+    if not m_data and not data_por_dia_semana:
         return False
 
     # Só age se a última mensagem do bot estava falando de boleto E pedindo a data
@@ -389,19 +413,24 @@ async def _tentar_gerar_boleto(
     # Extrai a data da mensagem do cliente
     vencimento_str = ""
 
-    # Tenta "dia 20" ou "para 20"
-    m_dia = re.search(r'\b(?:dia|para)\s+(\d{1,2})\b', msg_lower)
-    if m_dia:
-        dia = int(m_dia.group(1))
-        hoje = date.today()
-        mes = hoje.month if dia > hoje.day else (hoje.month % 12) + 1
-        ano = hoje.year if mes >= hoje.month else hoje.year + 1
-        try:
-            vencimento_str = date(ano, mes, dia).strftime('%Y-%m-%d')
-        except Exception:
-            pass
+    # Prioridade 1: dia da semana (ex: "segunda-feira", "quinta")
+    if data_por_dia_semana:
+        vencimento_str = data_por_dia_semana.strftime('%Y-%m-%d')
 
-    # Tenta "20/07" ou "20/07/2026"
+    # Prioridade 2: "dia 20" ou "para 20"
+    if not vencimento_str:
+        m_dia = re.search(r'\b(?:dia|para)\s+(\d{1,2})\b', msg_lower)
+        if m_dia:
+            dia = int(m_dia.group(1))
+            hoje = date.today()
+            mes = hoje.month if dia > hoje.day else (hoje.month % 12) + 1
+            ano = hoje.year if mes >= hoje.month else hoje.year + 1
+            try:
+                vencimento_str = date(ano, mes, dia).strftime('%Y-%m-%d')
+            except Exception:
+                pass
+
+    # Prioridade 3: "20/07" ou "20/07/2026"
     if not vencimento_str:
         m_dt = re.search(r'\b(\d{1,2})[/\-](\d{1,2})(?:[/\-](\d{2,4}))?\b', mensagem)
         if m_dt:
