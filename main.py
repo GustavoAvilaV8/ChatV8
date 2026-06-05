@@ -104,9 +104,9 @@ CENÁRIO 3 — 1 parcela Parcial + 1 parcela Vencida, com 2 descontos (1 parcial
 - Motivo: a empresa descontou integralmente mas o valor não chegou — problema no repasse
 
 FLUXO DE ATENDIMENTO:
-1. Cumprimente e se apresente como Setor de Qualidade da V8 Digital
-2. Se não identificar o cliente, peça o CPF (somente números)
-3. Com os dados do cliente, informe as parcelas pendentes com valores e vencimentos
+1. Sempre chame o cliente pelo primeiro nome desde a primeira mensagem — nunca comece sem o nome
+2. Se identificar o cliente pelo telefone, já saudei pelo nome e informe diretamente as pendências — não peça para ele informar o contrato
+3. Se o cliente tiver mais de 1 contrato, liste todos com: número do contrato, valor do desembolso, data da primeira parcela e situação atual — e pergunte sobre qual deseja tratar
 4. Pergunte se a empresa realizou o desconto no holerite e quantas vezes
 5. Com base na resposta, aplique o cenário correto
 6. Informe claramente o que o cliente deve pagar
@@ -566,21 +566,28 @@ async def _montar_contexto(numero_whatsapp: str, mensagem: str, ticket_id: str) 
         if detalhe:
             return _formatar_contexto_contrato(detalhe)
 
-    # Múltiplos contratos — lista resumida
+    # Múltiplos contratos — lista com detalhes completos
+    nome_cliente = contratos[0]['nome'].split()[0] if contratos[0].get('nome') else ''
     linhas = [
-        f"CONTEXTO DO CLIENTE:\n"
-        f"Nome: {contratos[0]['nome']}\n"
-        f"CPF: {contratos[0]['cpf']}\n"
-        f"Este cliente possui {len(contratos)} contrato(s):\n"
+        f"CONTEXTO DO CLIENTE:",
+        f"Nome: {contratos[0]['nome']}",
+        f"CPF: {contratos[0]['cpf']}",
+        f"INSTRUCAO: chame o cliente pelo primeiro nome ({nome_cliente}) desde a primeira mensagem.",
+        f"Este cliente possui {len(contratos)} contrato(s) — apresente todos abaixo sem pedir que ele informe o contrato:",
+        "",
     ]
     for c in contratos:
+        desembolso     = c.get('valor_desembolso') or c.get('valor_contrato') or 0
+        primeira_parc  = c.get('data_primeiro_venc') or c.get('primeira_parcela') or ''
         linhas.append(
             f"- Contrato {c['numero_contrato']} | "
-            f"Empresa: {c['empresa']} | "
-            f"Parcela: R$ {c['valor_parcela']:.2f} | "
-            f"Status: {c['status']}"
+            f"Empresa: {c.get('empresa', '')} | "
+            f"Valor desembolsado: R$ {float(desembolso):.2f} | "
+            f"Primeira parcela: {primeira_parc} | "
+            f"Parcela mensal: R$ {float(c.get('valor_parcela', 0)):.2f} | "
+            f"Status: {c.get('status', '')}"
         )
-    linhas.append("\nPergunte ao cliente sobre qual contrato deseja tratar.")
+    linhas.append("\nApresente todos os contratos e pergunte sobre qual deseja tratar.")
     return "\n".join(linhas)
 
 
@@ -590,12 +597,18 @@ def _formatar_contexto_contrato(detalhe: dict) -> str:
     r = detalhe.get("resumo", {})
     pendentes = detalhe.get("parcelas_pendentes", [])
 
+    nome_completo = c.get('nome', '')
+    primeiro_nome = nome_completo.split()[0] if nome_completo else ''
+
     linhas = [
         "CONTEXTO DO CLIENTE:",
-        f"Nome: {c.get('nome')}",
+        f"Nome: {nome_completo}",
         f"CPF: {c.get('cpf')}",
+        f"INSTRUCAO: chame o cliente pelo primeiro nome ({primeiro_nome}) desde a primeira mensagem.",
         f"Empresa: {c.get('empresa')}",
         f"Contrato: {c.get('numero')} ({c.get('provider')})",
+        f"Valor desembolsado: R$ {float(c.get('valor_desembolso') or c.get('valor_contrato') or 0):.2f}",
+        f"Data primeira parcela: {c.get('data_primeiro_venc') or c.get('primeira_parcela') or 'N/A'}",
         f"Valor da parcela: R$ {c.get('valor_parcela', 0):.2f}",
         f"Total de parcelas: {c.get('n_parcelas')}",
         "",
@@ -608,7 +621,7 @@ def _formatar_contexto_contrato(detalhe: dict) -> str:
 
     if pendentes:
         linhas.append("\nPARCELAS PENDENTES:")
-        for p in pendentes[:6]:  # máx 6 para não lotar o contexto
+        for p in pendentes[:6]:
             linhas.append(
                 f"  Parcela {p['numero']} | Venc: {p['vencimento']} | "
                 f"Em aberto: R$ {p['em_aberto']:.2f} | Status: {p['status']}"
