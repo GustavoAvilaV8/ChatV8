@@ -412,7 +412,8 @@ async def _enviar_via_meta(numero: str, mensagem: str) -> bool:
         return False
 
     # Usa o número normalizado (sem o 9 se tiver 13 dígitos)
-    numero_meta = _remover_nono_digito(numero)
+    # Meta usa o número completo com o 9 — não remove
+    numero_meta = _normalizar_numero_br(numero)
     # Remove o 55 do início se necessário — Meta usa formato internacional
     if numero_meta.startswith("55"):
         numero_meta = numero_meta  # mantém com 55
