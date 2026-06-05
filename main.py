@@ -337,9 +337,17 @@ async def _tentar_gerar_boleto(
     log.info(f"🔍 _tentar_gerar_boleto: msg='{mensagem[:60]}'")
 
     # Confirmações que dispensam data na mensagem atual (se já tiver no histórico)
-    CONFIRMACOES = {'sim', 'pode', 'ok', 'tá', 'ta', 'certo', 'isso', 'confirmo', 'pode ser',
-                    'pode gerar', 'gera', 'manda', 'no aguardo', 'aguardo', 'pode emitir'}
-    eh_confirmacao = msg_lower in CONFIRMACOES or any(msg_lower.startswith(c) for c in CONFIRMACOES)
+    CONFIRMACOES = {
+        'sim', 'pode', 'ok', 'tá', 'ta', 'certo', 'isso', 'confirmo',
+        'pode ser', 'pode gerar', 'gera', 'manda', 'aguardo', 'no aguardo',
+        'fico no aguardo', 'tudo certo', 'pode emitir', 'quero', 'claro',
+        'com certeza', 'isso mesmo', 'exato', 'pode sim', 'pode mandar',
+    }
+    eh_confirmacao = (
+        msg_lower in CONFIRMACOES or
+        any(msg_lower.startswith(c + ' ') or msg_lower == c for c in CONFIRMACOES) or
+        any(c in msg_lower for c in ['aguardo', 'tudo certo', 'pode gerar', 'pode emitir'])
+    )
 
     # Detecta dias da semana e converte para data
     DIAS_SEMANA = {
@@ -383,13 +391,21 @@ async def _tentar_gerar_boleto(
     pediu_data = any(p in ultima_resposta for p in [
         "data", "vencimento", "qual data", "prefere", "dia prefere",
         "data prefere", "quando", "data deseja", "para qual data",
+        "qual dia", "que dia", "para quando", "data quer", "data gostaria",
+        "data de vencimento", "vence", "para o dia", "dia você",
     ])
-    fala_boleto = any(p in ultima_resposta for p in ["boleto", "providenciar", "emitir", "gerar"])
-    log.info(f"🔍 ultima_resposta (100 chars): '{ultima_resposta[:100]}'")
+    fala_boleto = any(p in ultima_resposta for p in [
+        "boleto", "providenciar", "emitir", "gerar", "emissão", "emissao",
+    ])
+    log.info(f"🔍 ultima_resposta: '{ultima_resposta[:200]}'")
     log.info(f"🔍 pediu_data={pediu_data} fala_boleto={fala_boleto}")
 
-    if not pediu_data or not fala_boleto:
-        log.info("🔍 Última resposta não pediu data de boleto — não gera")
+    if not fala_boleto:
+        log.info("🔍 Última resposta não falava de boleto — não gera")
+        return False
+
+    if not pediu_data and not eh_confirmacao and not m_data and not data_por_dia_semana:
+        log.info("🔍 Sem data nem confirmação e bot não pediu data — não gera")
         return False
 
     # Extrai dados do contexto
