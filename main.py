@@ -120,7 +120,11 @@ REGRAS GERAIS:
 - Nunca invente valores fora do contexto fornecido
 - Refinanciamento NÃO está disponível — foque no boleto
 
-REGRA DE TOM — OBRIGATÓRIA:
+REGRA CRÍTICA — BOLETO:
+- NUNCA diga "boleto gerado", "boleto foi gerado", "enviado", "você vai receber" ou qualquer variação
+- Sua função é APENAS perguntar a data. O sistema gera o boleto automaticamente
+- Após o cliente informar a data, diga APENAS: "Certo, [data]. Pode aguardar."
+- NÃO confirme que gerou, NÃO diga que enviou, NÃO diga "você deve receber"
 - Máximo 3 blocos de mensagem por resposta
 - Linguagem direta e próxima, sem formalidade excessiva
 - Pode usar asteriscos para destacar informações importantes (contrato, valores, datas)
@@ -393,9 +397,11 @@ async def _tentar_gerar_boleto(
         "data prefere", "quando", "data deseja", "para qual data",
         "qual dia", "que dia", "para quando", "data quer", "data gostaria",
         "data de vencimento", "vence", "para o dia", "dia você",
+        "pode aguardar", "certo,", "aguardar",
     ])
     fala_boleto = any(p in ultima_resposta for p in [
         "boleto", "providenciar", "emitir", "gerar", "emissão", "emissao",
+        "pode aguardar", "aguardar", "aguarde",
     ])
     log.info(f"🔍 ultima_resposta: '{ultima_resposta[:200]}'")
     log.info(f"🔍 pediu_data={pediu_data} fala_boleto={fala_boleto}")
