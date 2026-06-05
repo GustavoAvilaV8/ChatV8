@@ -382,12 +382,12 @@ async def _tentar_gerar_boleto(
         return False
 
     # Extrai dados do contexto
-
     nome      = ""
     cpf       = ""
     contrato  = ""
     valor     = 0.0
     parcelas  = []
+    provider  = ""
 
     if contexto:
         m = re.search(r'Nome:\s*(.+)', contexto)
@@ -395,25 +395,41 @@ async def _tentar_gerar_boleto(
         m = re.search(r'CPF:\s*(\d+)', contexto)
         if m: cpf = m.group(1).strip()
         m = re.search(r'Contrato:\s*(\S+)', contexto)
-        if m: contrato = m.group(1).strip()
-        # Pega o total em aberto como valor do boleto
+        if m: contrato = m.group(1).strip().rstrip('(').strip()
+        m = re.search(r'Contrato:\s*\S+\s*\((\w+)\)', contexto)
+        if m: provider = m.group(1).upper()
         m = re.search(r'Total em aberto:\s*R\$\s*([\d.,]+)', contexto)
         if m:
             valor = float(m.group(1).replace('.', '').replace(',', '.'))
-        # Tenta pegar parcelas pendentes
         nums = re.findall(r'Parcela\s+(\d+)', contexto)
-        parcelas = [int(n) for n in nums[:6]]
+        parcelas = [int(n) for n in nums[:1]]  # só a primeira (mais antiga)
 
-    if not contrato or valor <= 0:
-        log.info("Boleto: dados insuficientes no contexto para gerar automaticamente")
+    if not contrato:
+        log.info("Boleto: contrato não encontrado no contexto")
         return False
 
-    # Detecta provider pelo contexto (linha: "Contrato: XPTO (CELCOIN)" ou "(QI)")
-    provider = ""
-    m = re.search(r'Contrato:\s*\S+\s*\((\w+)\)', contexto)
-    if m:
-        provider = m.group(1).upper()
-    log.info(f"💳 Provider detectado: '{provider}'")
+    # Se não tem valor no contexto, busca os detalhes do contrato na API
+    if valor <= 0:
+        log.info(f"Boleto: buscando detalhes do contrato {contrato} na API")
+        detalhe = await _consultar_api(f"/api/cobranca/contrato/{contrato}")
+        if detalhe:
+            pendentes = detalhe.get('parcelas_pendentes', [])
+            if pendentes:
+                # Pega a parcela mais antiga (primeira da lista)
+                primeira = pendentes[0]
+                valor    = primeira['em_aberto']
+                parcelas = [primeira['numero']]
+                if not provider:
+                    provider = (detalhe.get('contrato', {}).get('provider') or '').upper()
+                if not nome:
+                    nome = detalhe.get('contrato', {}).get('nome', '')
+                if not cpf:
+                    cpf = detalhe.get('contrato', {}).get('cpf', '')
+                log.info(f"Boleto: parcela {primeira['numero']} valor={valor} provider={provider}")
+
+    if valor <= 0:
+        log.info("Boleto: valor ainda 0 após busca na API — sem parcelas pendentes")
+        return False
 
     # Extrai a data da mensagem do cliente
     vencimento_str = ""
