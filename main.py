@@ -656,12 +656,13 @@ def _formatar_contexto_contrato(detalhe: dict) -> str:
     ]
 
     if pendentes:
-        linhas.append("\nPARCELAS PENDENTES:")
+        linhas.append("\nPARCELAS PENDENTES (use estes valores exatos para o boleto):")
         for p in pendentes[:6]:
             linhas.append(
-                f"  Parcela {p['numero']} | Venc: {p['vencimento']} | "
-                f"Em aberto: R$ {p['em_aberto']:.2f} | Status: {p['status']}"
+                f"  Parcela {p['numero']} | Venc original: {p['vencimento']} | "
+                f"Valor do boleto: R$ {p['em_aberto']:.2f} | Status: {p['status']}"
             )
+        linhas.append("\nIMPORTANTE: cada parcela tem seu proprio valor. Use 'Valor do boleto' de cada parcela individualmente — nunca divida o total.")
 
     return "\n".join(linhas)
 
