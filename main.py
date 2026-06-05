@@ -334,6 +334,7 @@ async def _tentar_gerar_boleto(
     Retorna True se o boleto foi gerado e enviado.
     """
     msg_lower = mensagem.lower().strip()
+    log.info(f"🔍 _tentar_gerar_boleto: msg='{mensagem[:60]}'")
 
     # Detecta dias da semana e converte para data
     DIAS_SEMANA = {
@@ -347,7 +348,6 @@ async def _tentar_gerar_boleto(
     }
 
     def _proximo_dia_semana(alvo_weekday: int) -> date:
-        """Retorna a próxima ocorrência do dia da semana (nunca hoje)."""
         hoje = date.today()
         dias = (alvo_weekday - hoje.weekday() + 7) % 7
         if dias == 0:
@@ -358,17 +358,20 @@ async def _tentar_gerar_boleto(
     for nome_dia, weekday in DIAS_SEMANA.items():
         if nome_dia in msg_lower:
             data_por_dia_semana = _proximo_dia_semana(weekday)
+            log.info(f"🔍 Dia da semana detectado: '{nome_dia}' → {data_por_dia_semana}")
             break
 
-    # Só gera boleto quando a mensagem contiver uma data ou dia da semana
     m_data = re.search(r'\b(\d{1,2})[/\-](\d{1,2})(?:[/\-](\d{2,4}))?\b|\bdia\s+(\d{1,2})\b|\bpara\s+(\d{1,2})\b', msg_lower)
+    log.info(f"🔍 m_data={bool(m_data)} data_por_dia_semana={data_por_dia_semana}")
+
     if not m_data and not data_por_dia_semana:
+        log.info("🔍 Sem data na mensagem — não gera boleto")
         return False
 
-    # Só age se a última mensagem do bot estava falando de boleto E pedindo a data
     historico = db.buscar_historico(conversa_id=ticket_id, limite=6)
     msgs_assistant = [h for h in historico if h["papel"] == "assistant"]
     if not msgs_assistant:
+        log.info("🔍 Sem histórico do assistant")
         return False
 
     ultima_resposta = msgs_assistant[-1]["conteudo"].lower()
@@ -377,8 +380,11 @@ async def _tentar_gerar_boleto(
         "data prefere", "quando", "data deseja", "para qual data",
     ])
     fala_boleto = any(p in ultima_resposta for p in ["boleto", "providenciar", "emitir", "gerar"])
+    log.info(f"🔍 ultima_resposta (100 chars): '{ultima_resposta[:100]}'")
+    log.info(f"🔍 pediu_data={pediu_data} fala_boleto={fala_boleto}")
 
     if not pediu_data or not fala_boleto:
+        log.info("🔍 Última resposta não pediu data de boleto — não gera")
         return False
 
     # Extrai dados do contexto
@@ -487,10 +493,11 @@ async def _tentar_gerar_boleto(
         log.info("Boleto: data informada pelo cliente não reconhecida")
         return False
 
-    log.info(f"💳 Gerando boleto: provider={provider} contrato={contrato} valor={valor} venc={vencimento_str}")
+    log.info(f"💳 Gerando boleto: provider={provider} contrato={contrato} valor={valor} venc={vencimento_str} parcelas={parcelas}")
 
     # Chama a rota correta baseado no provider
     if provider == "QI":
+        log.info(f"💳 Chamando API QI para contrato {contrato}")
         resultado = await _gerar_boleto_qi(
             numero_contrato=contrato,
             nome=nome,
@@ -500,7 +507,7 @@ async def _tentar_gerar_boleto(
             parcelas=parcelas,
         )
     else:
-        # Celcoin ou qualquer outro → Asaas
+        log.info(f"💳 Chamando API Asaas para contrato {contrato} (provider={provider})")
         resultado = await _gerar_boleto_asaas(
             numero_contrato=contrato,
             nome=nome,
@@ -509,6 +516,8 @@ async def _tentar_gerar_boleto(
             vencimento=vencimento_str,
             parcelas=parcelas,
         )
+
+    log.info(f"💳 Resultado boleto: {resultado}")
 
     if not resultado or not resultado.get("ok"):
         erro = resultado.get("erro", "erro desconhecido") if resultado else "sem resposta"
@@ -522,28 +531,26 @@ async def _tentar_gerar_boleto(
         )
         return True  # Retorna True para não enviar a resposta normal novamente
 
-    # Monta mensagem com os dados do boleto
+    # Monta mensagem com os dados do boleto — sem incluir resposta do Claude
     linha = resultado.get("linha_digitavel", "")
     url   = resultado.get("url_boleto", "")
     pix   = resultado.get("pix_copia_cola", "")
     valor_fmt = f"R$ {resultado.get('valor', valor):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     venc_fmt  = vencimento_str[8:] + "/" + vencimento_str[5:7] + "/" + vencimento_str[:4]
 
-    partes = [resposta_claude, ""]
-    partes.append(f"Boleto gerado com sucesso!")
-    partes.append(f"Valor: {valor_fmt}")
-    partes.append(f"Vencimento: {venc_fmt}")
+    partes = []
+    partes.append(f"Boleto gerado! Valor: {valor_fmt} | Vencimento: {venc_fmt}")
 
     if linha:
         partes.append(f"\nLinha digitavel:\n{linha}")
     if url:
-        partes.append(f"\nLink do boleto:\n{url}")
+        partes.append(f"\nLink:\n{url}")
     if pix:
         partes.append(f"\nPix copia e cola:\n{pix}")
     if resultado.get("pending") and not url and not linha:
-        partes.append("\nO link do boleto sera disponibilizado em breve pela QI. Qualquer duvida, estou a disposicao.")
+        partes.append("\nO link sera disponibilizado em breve pela QI.")
 
-    partes.append("\nApos o pagamento, envie o comprovante para darmos baixa.")
+    partes.append("\nApos pagar, manda o comprovante para darmos baixa.")
 
     mensagem_final = "\n".join(partes)
     await enviar_mensagem_vectax(ticket_id, numero_whatsapp, mensagem_final, contact_id, numero_vectax or numero_whatsapp)
