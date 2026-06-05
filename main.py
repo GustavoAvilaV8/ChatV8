@@ -438,20 +438,30 @@ async def _tentar_gerar_boleto(
         parcelas = [int(n) for n in nums[:1]]  # só a primeira (mais antiga)
 
     if not contrato:
-        # Tenta achar o contrato no histórico da conversa
+        # Tenta achar o contrato no histórico da conversa (mensagens salvas)
         historico_completo = db.buscar_historico(conversa_id=ticket_id, limite=20)
         for msg in reversed(historico_completo):
-            m = re.search(r'Contrato:\s*(\S+)', msg.get('conteudo', ''))
+            m = re.search(r'\bMAG\w+|\b\d{6,}\w*', msg.get('conteudo', ''))
             if m:
-                contrato = m.group(1).strip().rstrip('(').strip()
-                m2 = re.search(r'Contrato:\s*\S+\s*\((\w+)\)', msg.get('conteudo', ''))
-                if m2 and not provider:
-                    provider = m2.group(1).upper()
-                log.info(f"Boleto: contrato {contrato} encontrado no histórico")
-                break
+                candidato = m.group(0)
+                if len(candidato) >= 6:
+                    contrato = candidato
+                    log.info(f"Boleto: contrato {contrato} encontrado no histórico")
+                    break
 
     if not contrato:
-        log.info("Boleto: contrato não encontrado no contexto nem no histórico")
+        # Busca no banco do CRM pelo número do whatsapp
+        dados_crm = await _consultar_api(f"/chatbot/api/conversa/dados/{numero_whatsapp}")
+        if dados_crm and dados_crm.get('encontrado'):
+            contrato = dados_crm.get('numero_contrato', '')
+            if not cpf:
+                cpf = dados_crm.get('cpf', '')
+            if not nome:
+                nome = dados_crm.get('nome', '')
+            log.info(f"Boleto: contrato {contrato} encontrado no CRM")
+
+    if not contrato:
+        log.info("Boleto: contrato não encontrado em nenhuma fonte")
         return False
 
     # Se não tem valor no contexto, busca os detalhes do contrato na API
